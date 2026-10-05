@@ -1,408 +1,538 @@
 # Spec — Motor de Cálculo de Reembolso
 
-**Versão:** 1.0 · **Status:** em aprovação · **Última alteração:** 2026-10-05
+**Versão:** 1.1 · **Status:** aprovada para implementação · **Última alteração:** 2026-10-05
 
-> **Regra de ouro deste arquivo:** ele descreve o QUÊ e o PORQUÊ. Nenhuma linha
-> aqui pode citar linguagem, biblioteca, classe, função ou estrutura de pasta.
-> Se apareceu solução, o lugar dela é o `plan.md`.
->
-> **Teste de aceitação da própria spec:** uma pessoa que nunca viu o projeto
-> consegue, lendo só este arquivo, verificar se o sistema está correto?
+> Este documento define o que o produto faz e por quê. Decisões de tecnologia e
+> organização da implementação pertencem ao `plan.md`.
 
 ---
 
 ## 1. Problema
 
-O RH processa reembolsos de despesas manualmente, item por item. O processo é lento, propenso a erros e não deixa trilha de decisão. Colaboradores não sabem por que foram recusados ou parcialmente reembolsados. Auditar decisões passadas é impossível.
+O financeiro confere manualmente cada despesa contra uma política textual. O
+processo é demorado, sujeito a interpretações diferentes e não explica de forma
+padronizada quanto foi aceito ou recusado em cada lançamento.
 
 ## 2. Objetivo
 
-Automatizar o cálculo de reembolso de despesas contra a política, gerando uma lista de decisões justificadas para cada item e resumo por categoria.
+Receber as despesas de um colaborador em um período, calcular de forma
+determinística o valor reembolsável e justificar a decisão tomada para cada
+despesa.
 
 ## 3. Fora de escopo
 
-- Integração com sistemas de folha de pagamento ou banco de dados
-- Interface gráfica — apenas CLI
-- Autenticação ou controle de permissões
-- Processamento de múltiplos colaboradores em lote (apenas um por execução)
-- Sugestões de mudança de política
-- Armazenamento persistente de histórico de processamento
+- efetuar pagamentos ou integrar com folha, banco ou sistema contábil;
+- autenticar usuários ou autorizar quem pode solicitar reembolso;
+- armazenar histórico entre execuções;
+- corrigir ou completar automaticamente dados ausentes;
+- processar mais de um colaborador na mesma execução;
+- inferir viagem, quantidade de diárias ou outros fatos a partir de texto livre;
+- avaliar necessidade, razoabilidade ou finalidade comercial da despesa;
+- aplicar regras diferentes por fim de semana, feriado ou centro de custo.
 
----
+## 4. Contrato de entrada
 
-## 4. Entrada e saída
-
-**Entrada:** arquivo JSON conforme `exemplos/despesas-exemplo.json`. 
+A entrada é um documento JSON no formato de
+`exemplos/despesas-exemplo.json`.
 
 | Campo | Tipo | Significado | Obrigatório |
 |---|---|---|---|
-| `colaborador.id` | string | Identificador único do colaborador | Sim |
-| `colaborador.nome` | string | Nome do colaborador | Sim |
-| `colaborador.centro_custo` | string | Centro de custo para alocação | Sim |
-| `periodo.competencia` | string | Período no formato YYYY-MM | Sim |
-| `periodo.inicio` | string | Data de início (YYYY-MM-DD) | Sim |
-| `periodo.fim` | string | Data de fim (YYYY-MM-DD) | Sim |
-| `despesas[].id` | string | ID único da despesa | Sim |
-| `despesas[].data` | string | Data da despesa (YYYY-MM-DD) | Sim |
-| `despesas[].categoria` | string | Uma de: alimentacao, transporte_urbano, hospedagem | Sim |
-| `despesas[].descricao` | string | Descrição da despesa | Sim |
-| `despesas[].fornecedor` | string | Nome do fornecedor/estabelecimento | Sim |
-| `despesas[].valor` | number | Valor em R$, pode ser negativo (estorno) | Sim |
-| `despesas[].tem_nota_fiscal` | boolean | Se possui nota fiscal | Sim |
+| `colaborador.id` | texto não vazio | Identificador do colaborador | Sim |
+| `colaborador.nome` | texto não vazio | Nome do colaborador | Sim |
+| `colaborador.centro_custo` | texto não vazio | Centro de custo | Sim |
+| `periodo.competencia` | texto `AAAA-MM` | Competência declarada | Sim |
+| `periodo.inicio` | data `AAAA-MM-DD` | Primeiro dia elegível | Sim |
+| `periodo.fim` | data `AAAA-MM-DD` | Último dia elegível | Sim |
+| `despesas` | lista | Lançamentos na ordem em que foram recebidos | Sim |
+| `despesas[].id` | texto não vazio e único | Identificador do lançamento | Sim |
+| `despesas[].data` | data `AAAA-MM-DD` | Data da despesa | Sim |
+| `despesas[].categoria` | texto | Categoria informada | Sim |
+| `despesas[].descricao` | texto não vazio | Descrição informada | Sim |
+| `despesas[].fornecedor` | texto não vazio | Fornecedor informado | Sim |
+| `despesas[].valor` | número finito | Valor em reais | Sim |
+| `despesas[].tem_nota_fiscal` | booleano | Existência de nota fiscal | Sim |
 
-**Saída:** arquivo JSON com este schema:
+O período é válido somente quando `inicio` não é posterior a `fim` e ambas as
+datas pertencem ao mês indicado em `competencia`. Campo ausente, tipo incorreto,
+data impossível, identificador de despesa repetido ou período inválido torna o
+documento inteiro inválido. Nesse caso, nenhum cálculo é produzido e o erro deve
+identificar o campo ou a condição inválida.
+
+## 5. Contrato de saída
+
+Quando a entrada é válida, a saída contém exatamente um resultado, preserva a
+ordem original das despesas e usa textos monetários com duas casas decimais para
+evitar perda de precisão.
+
+| Campo | Tipo | Significado |
+|---|---|---|
+| `politica_versao` | texto | Versão da política aplicada; nesta spec, `3` |
+| `colaborador` | objeto | Cópia dos três campos do colaborador |
+| `periodo` | objeto | Cópia dos três campos do período |
+| `resumo.quantidade_despesas` | inteiro | Quantidade recebida |
+| `resumo.total_solicitado` | texto monetário | Soma dos valores normalizados maiores que zero |
+| `resumo.total_reembolsavel` | texto monetário | Soma dos valores reembolsáveis |
+| `resumo.total_nao_reembolsavel` | texto monetário | `total_solicitado - total_reembolsavel` |
+| `resumo.quantidade_aprovadas` | inteiro | Itens reembolsados integralmente |
+| `resumo.quantidade_parciais` | inteiro | Itens com reembolso maior que zero e menor que o solicitado |
+| `resumo.quantidade_rejeitadas` | inteiro | Itens com reembolso igual a zero |
+| `decisoes` | lista | Uma decisão por despesa, na ordem da entrada |
+| `decisoes[].id` | texto | ID original da despesa |
+| `decisoes[].status` | enum | `APROVADA`, `PARCIAL` ou `REJEITADA` |
+| `decisoes[].valor_original` | texto | Valor recebido, sem arredondamento |
+| `decisoes[].valor_normalizado` | texto monetário | Valor após a regra de precisão |
+| `decisoes[].valor_reembolsavel` | texto monetário | Valor pago para o item |
+| `decisoes[].valor_nao_reembolsavel` | texto monetário | Parte positiva solicitada que não será paga |
+| `decisoes[].codigo_motivo` | enum | Motivo principal da decisão |
+| `decisoes[].justificativa` | texto | Explicação legível e específica |
+| `decisoes[].regras_aplicadas` | lista de textos | IDs das regras relevantes |
+
+Os códigos de motivo permitidos são `APROVADA_INTEGRAL`, `LIMITE_PARCIAL`,
+`LIMITE_ESGOTADO`, `FORA_DA_COMPETENCIA`, `CATEGORIA_NAO_COBERTA`,
+`VALOR_NAO_POSITIVO`, `DUPLICATA` e `NOTA_FISCAL_AUSENTE`.
+
+Exemplo mínimo de saída:
 
 ```json
 {
-  "sumario_processamento": {
-    "colaborador_id": "c-0417",
-    "colaborador_nome": "Marina Volpi",
-    "periodo_competencia": "2026-07",
-    "data_processamento": "2026-10-05T14:30:00Z",
-    "total_despesas_submetidas": 1850.84,
-    "total_reembolsavel": 1234.50,
-    "total_nao_reembolsavel": 616.34,
-    "despesas_processadas": 14,
-    "despesas_rejeitadas": 2,
-    "despesas_parciais": 3
+  "politica_versao": "3",
+  "colaborador": {"id": "c-1", "nome": "Ana", "centro_custo": "CC-1"},
+  "periodo": {"competencia": "2026-07", "inicio": "2026-07-01", "fim": "2026-07-31"},
+  "resumo": {
+    "quantidade_despesas": 1,
+    "total_solicitado": "72.50",
+    "total_reembolsavel": "60.00",
+    "total_nao_reembolsavel": "12.50",
+    "quantidade_aprovadas": 0,
+    "quantidade_parciais": 1,
+    "quantidade_rejeitadas": 0
   },
-  "resultado_por_categoria": {
-    "alimentacao": {
-      "total_submetido": 450.00,
-      "total_reembolsavel": 300.00,
-      "total_nao_reembolsavel": 150.00,
-      "justificativa": "Limite diário de R$ 60 aplicado, com agregação por data"
-    },
-    "transporte_urbano": {
-      "total_submetido": 200.01,
-      "total_reembolsavel": 160.00,
-      "total_nao_reembolsavel": 40.01,
-      "justificativa": "Limite diário de R$ 80 aplicado"
-    },
-    "hospedagem": {
-      "total_submetido": 1170.00,
-      "total_reembolsavel": 700.00,
-      "total_nao_reembolsavel": 470.00,
-      "justificativa": "Limite por noite de R$ 250 aplicado"
-    }
-  },
-  "decisoes_por_despesa": [
-    {
-      "id_despesa": "d-001",
-      "data": "2026-07-03",
-      "categoria": "alimentacao",
-      "descricao": "Almoco com cliente",
-      "valor_original": 72.50,
-      "valor_reembolsavel": 60.00,
-      "status": "PARCIAL",
-      "motivo": "Limite diário de R$ 60 atingido. Excedente de R$ 12.50 não reembolsado.",
-      "regras_aplicadas": ["RN-001", "RN-004"]
-    }
-  ]
+  "decisoes": [{
+    "id": "d-1",
+    "status": "PARCIAL",
+    "valor_original": "72.5",
+    "valor_normalizado": "72.50",
+    "valor_reembolsavel": "60.00",
+    "valor_nao_reembolsavel": "12.50",
+    "codigo_motivo": "LIMITE_PARCIAL",
+    "justificativa": "Reembolso limitado a R$ 60,00 para alimentação em 2026-07-03.",
+    "regras_aplicadas": ["RN-007", "RN-010"]
+  }]
 }
 ```
 
----
+## 6. Regras de negócio
 
-## 5. Regras de negócio
+### RN-001 — Validade do documento
 
-### RN-001 — Limite diário de alimentação
+**Regra:** a entrada deve cumprir integralmente o contrato da seção 4. Entrada
+inválida encerra o processamento sem resultado parcial.
 
-**Regra:** O reembolso de despesas de alimentação em um mesmo dia é limitado a R$ 60,00. Se o total de despesas de alimentação em um dia exceder R$ 60, o valor excedente não é reembolsável.
+**Origem:** interface fixa do desafio.
 
-**Origem:** Política do RH, item 1
+**Aceite:** dois itens com o mesmo `id` produzem erro de entrada e nenhum JSON de
+resultado.
 
-**Aceite:** Entrada com duas refeições no mesmo dia (R$ 72,50 + R$ 38,00 = R$ 110,50) resulta em reembolso de R$ 60,00 total para esse dia, com R$ 50,50 rejeitado.
+### RN-002 — Período de competência
 
----
+**Regra:** uma despesa é elegível quanto à data quando sua data pertence ao
+intervalo fechado de `periodo.inicio` até `periodo.fim`. Os dois extremos estão
+incluídos. Item fora desse intervalo é rejeitado.
 
-### RN-002 — Limite diário de transporte urbano
+**Origem:** política do RH, item 7.
 
-**Regra:** O reembolso de despesas de transporte urbano em um mesmo dia é limitado a R$ 80,00. Se o total de despesas de transporte urbano em um dia exceder R$ 80, o valor excedente não é reembolsável.
+**Aceite:** no período de 2026-07-01 a 2026-07-31, despesas nessas duas datas são
+elegíveis e uma despesa em 2026-04-15 é rejeitada.
 
-**Origem:** Política do RH, item 2
+### RN-003 — Categorias cobertas
 
-**Aceite:** Duas corridas de R$ 100,00 cada no mesmo dia (R$ 200,00 total) resultam em reembolso de R$ 80,00, com R$ 120,00 rejeitado.
+**Regra:** depois de remover espaços nas extremidades e ignorar diferenças entre
+maiúsculas e minúsculas, somente `alimentacao`, `transporte_urbano` e
+`hospedagem` são cobertas. Outras categorias são rejeitadas.
 
----
+**Origem:** política do RH, item 9.
 
-### RN-003 — Limite por noite de hospedagem
+**Aceite:** `ALIMENTACAO` é tratada como `alimentacao`; `coworking` é rejeitada.
 
-**Regra:** O reembolso de despesas de hospedagem é limitado a R$ 250,00 por noite. Despesas lançadas como um único item especificando múltiplas noites devem ter seu valor dividido pelo número de noites; o resultado é comparado ao limite. Se ultrapassar, o reembolso é calculado como (número de noites × R$ 250,00).
+### RN-004 — Valores não positivos
 
-**Origem:** Política do RH, item 3
+**Regra:** valor igual a zero ou negativo não gera crédito nem reduz o consumo de
+limite. O item é rejeitado e contribui com zero para os totais solicitado,
+reembolsável e não reembolsável.
 
-**Aceite:** Uma despesa de R$ 480,00 descrita como "2 diárias" resulta em cálculo de R$ 240,00 por noite (dentro do limite), logo é totalmente reembolsada.
+**Origem:** decisão necessária porque a entrada contém valor negativo e a
+política não define estornos.
 
----
+**Aceite:** uma despesa de R$ -45,00 é rejeitada com reembolso R$ 0,00 e não
+altera o limite disponível do dia.
 
-### RN-004 — Reembolso parcial por limite
+### RN-005 — Nota fiscal
 
-**Regra:** Quando uma despesa ou agregado de despesas no período excede o limite, o sistema reembolsa até o limite e rejeita o excedente (não paga parcialmente o item individual; paga até o limite do dia/noite, depois para).
+**Regra:** item cujo valor normalizado seja estritamente maior que R$ 100,00 é
+rejeitado quando `tem_nota_fiscal` for falso. A verificação considera o valor
+solicitado antes de qualquer limite de categoria.
 
-**Origem:** Política do RH, item 4
+**Origem:** política do RH, item 5.
 
-**Aceite:** Uma despesa de R$ 100,00 sozinha em um dia com limite de R$ 60,00 é reembolsada em R$ 60,00 (parcial).
+**Aceite:** R$ 100,00 sem nota continua elegível; R$ 100,01 sem nota é rejeitado,
+mesmo quando o limite da categoria seria menor que R$ 100,01.
 
----
+### RN-006 — Duplicatas
 
-### RN-005 — Nota fiscal obrigatória acima de R$ 100
+**Regra:** despesas formam uma duplicata quando, após normalização, têm a mesma
+data, categoria, descrição, fornecedor e valor. A primeira ocorrência segue o
+processamento normal; cada ocorrência posterior é rejeitada. Diferenças apenas
+de espaços nas extremidades ou de maiúsculas/minúsculas em categoria, descrição
+e fornecedor não tornam os itens distintos.
 
-**Regra:** Despesas com valor (absoluto) maior que R$ 100,00 sem nota fiscal não são reembolsáveis.
+**Origem:** política do RH, item 8.
 
-**Origem:** Política do RH, item 5
+**Aceite:** entre `d-006` e `d-007` do exemplo, `d-006` segue o processamento e
+`d-007` é rejeitada como duplicata.
 
-**Aceite:** Uma corrida de R$ 100,01 sem nota fiscal é rejeitada. Uma corrida de R$ 100,00 sem nota fiscal é aceita (não ultrapassa o limite).
+### RN-007 — Limite diário de alimentação
 
----
+**Regra:** a soma reembolsável de alimentação por data é limitada a R$ 60,00.
 
-### RN-006 — Estornos
+**Origem:** política do RH, item 1.
 
-**Regra:** Despesas com valor negativo (estornos/devoluções) reduzem o total do dia na categoria, permitindo reembolso adicional até o limite do dia se houver. Valores negativos puros (sem correspondência de despesa positiva) não geram crédito.
+**Aceite:** itens elegíveis de R$ 72,50 e R$ 38,00 na mesma data recebem, juntos,
+R$ 60,00.
 
-**Origem:** Política do RH, item 8 (duplicatas/tratamento especial)
+### RN-008 — Limite diário de transporte urbano
 
-**Aceite:** Dia com R$ 60,00 de alimentação e depois um estorno de -R$ 20,00 resulta em base de R$ 40,00, deixando R$ 20,00 de espaço no limite de R$ 60,00.
+**Regra:** a soma reembolsável de transporte urbano por data é limitada a
+R$ 80,00.
 
----
+**Origem:** política do RH, item 2.
 
-### RN-007 — Período de competência
+**Aceite:** um item elegível de R$ 100,00 recebe R$ 80,00; outro item elegível
+posterior na mesma data recebe somente o saldo que ainda existir.
 
-**Regra:** Apenas despesas cuja data está dentro do intervalo `[periodo.inicio, periodo.fim]` são processadas. Despesas fora desse intervalo são rejeitadas com motivo "fora do período de competência".
+### RN-009 — Limite de hospedagem
 
-**Origem:** Política do RH, item 7
+**Regra:** cada lançamento de hospedagem representa exatamente uma diária e tem
+limite de R$ 250,00. Texto como “2 diárias” ou “3 noites” não altera essa
+quantidade.
 
-**Aceite:** Uma despesa de abril em um período de julho é rejeitada.
+**Origem:** política do RH, item 3, aplicada com o dado disponível na entrada.
 
----
+**Aceite:** uma hospedagem elegível de R$ 480,00 recebe R$ 250,00, ainda que sua
+descrição mencione duas diárias.
 
-### RN-008 — Duplicatas exatas
+### RN-010 — Reembolso parcial e alocação
 
-**Regra:** Se duas ou mais despesas têm idênticos: data, categoria, valor e fornecedor, apenas a primeira é reembolsada; as demais são rejeitadas com motivo "duplicata detectada".
+**Regra:** quando um limite é ultrapassado, paga-se o saldo disponível e recusa-se
+o excedente. Para limites diários, despesas elegíveis consomem o limite na ordem
+em que aparecem na entrada. Um item que recebe o valor inteiro é `APROVADA`; um
+item que recebe parte é `PARCIAL`; um item que recebe zero é `REJEITADA`.
 
-**Origem:** Política do RH, item 8
+**Origem:** política do RH, item 4.
 
-**Aceite:** Duas despesas de R$ 54,90 no mesmo dia, mesma categoria, mesmo fornecedor (Bistro Central) — uma é aceita, a outra é rejeitada.
+**Aceite:** para duas alimentações de R$ 40,00 na mesma data, a primeira recebe
+R$ 40,00 e a segunda R$ 20,00.
 
----
+### RN-011 — Limites de viagem
 
-### RN-009 — Categorias válidas
+**Regra:** como o contrato de entrada não informa se o colaborador está em
+viagem, toda execução aplica os limites básicos, sem acréscimo de 50%.
 
-**Regra:** Apenas as categorias alimentacao, transporte_urbano e hospedagem são reembolsáveis. Qualquer outra categoria é rejeitada com motivo "categoria não está na política de reembolso".
+**Origem:** política do RH, item 6, e ausência do dado necessário na interface.
 
-**Origem:** Política do RH, item 9
+**Aceite:** nenhuma combinação dos campos atuais ativa limite ampliado.
 
-**Aceite:** Uma despesa com categoria "coworking" é rejeitada.
+### RN-012 — Precisão monetária
 
----
+**Regra:** cada valor recebido é arredondado para centavos antes da aplicação de
+qualquer outra regra, usando o centavo mais próximo; empate de meio centavo é
+arredondado para longe de zero. Todos os cálculos posteriores usam o valor
+normalizado.
 
-## 6. Ambiguidades identificadas e decisões
+**Origem:** decisão necessária porque a entrada admite números com mais de duas
+casas decimais.
 
-### AMB-001 — "R$ 60 por dia" — por dia ou por despesa?
+**Aceite:** R$ 33,333 torna-se R$ 33,33; R$ 33,335 torna-se R$ 33,34.
 
-**Texto original:** "Alimentação tem limite de R$ 60 por dia."
+### RN-013 — Explicação e reconciliação
 
-**O que não estava claro:** Se é R$ 60 por dia (total agregado) ou R$ 60 por despesa individual.
+**Regra:** toda despesa válida de entrada gera exatamente uma decisão. A soma das
+quantidades por status equivale à quantidade de despesas, e
+`total_solicitado = total_reembolsavel + total_nao_reembolsavel`.
 
-**Decisão:** R$ 60 por dia (agregado). Múltiplas refeições no mesmo dia têm seus valores somados, e o total não pode exceder R$ 60.
+**Origem:** necessidade de auditoria do processo.
 
-**Justificativa:** A palavra "dia" sugere período temporal, não itemização. Agregação por dia é mais restritiva (e portanto mais conservadora para a empresa), reduzindo o risco de reembolsos excessivos.
+**Aceite:** o resultado do arquivo de exemplo contém 14 decisões, na mesma ordem
+dos 14 itens, e seus totais reconciliam.
 
-**Regra afetada:** RN-001
+## 7. Ambiguidades identificadas e decisões
 
----
+### AMB-001 — Unidade dos limites diários
 
-### AMB-002 — "Reembolsadas parcialmente" — até o limite ou rejeita tudo?
+**Texto original do RH:** “Alimentação tem limite de R$ 60 por dia” e
+“Transporte urbano tem limite de R$ 80 por dia”.
 
-**Texto original:** "Despesas acima do limite são reembolsadas parcialmente."
+**O que não está claro:** o limite poderia valer para cada item ou para a soma da
+categoria no dia.
 
-**O que não estava claro:** Se é reembolso parcial (paga R$ 60 de uma despesa de R$ 100) ou rejeição total.
+**Decisão:** vale para a soma de todos os itens da categoria na mesma data.
 
-**Decisão:** Reembolso parcial. Sistema paga até o limite do dia/noite e rejeita o excedente.
+**Justificativa:** “por dia” define uma unidade temporal compartilhada, não uma
+unidade por comprovante.
 
-**Justificativa:** "Parcialmente" denota divisão, não rejeição. Mais justo com o colaborador e aumenta satisfação.
+**Regras afetadas:** RN-007 e RN-008.
 
-**Regra afetada:** RN-004
+### AMB-002 — Significado de reembolso parcial
 
----
+**Texto original do RH:** “Despesas acima do limite são reembolsadas parcialmente.”
 
-### AMB-003 — "Acima de R$ 100" — R$ 100 é incluído?
+**O que não está claro:** pagar até o limite ou recusar o item inteiro.
 
-**Texto original:** "Nota fiscal é obrigatória acima de R$ 100."
+**Decisão:** pagar até o saldo do limite e recusar apenas o excedente.
 
-**O que não estava claro:** Se "acima" inclui R$ 100,00 exato ou começa a partir de R$ 100,01.
+**Justificativa:** é a leitura literal de “parcialmente” e evita perder a parcela
+expressamente coberta pela política.
 
-**Decisão:** Começa a partir de R$ 100,01. Despesas de R$ 100,00 exato não precisam de nota fiscal.
+**Regra afetada:** RN-010.
 
-**Justificativa:** "Acima" em português tem interpretação limítrofe ambígua; escolhemos a leitura que protege o colaborador (mais permissiva). Importante: valores não-inteiros (R$ 100,01) requeiram nota fiscal.
+### AMB-003 — Fronteira da nota fiscal
 
-**Regra afetada:** RN-005
+**Texto original do RH:** “Nota fiscal é obrigatória acima de R$ 100.”
 
----
+**O que não está claro:** se R$ 100,00 também exige nota.
 
-### AMB-004 — "Em viagem" — o que caracteriza?
+**Decisão:** somente valores normalizados maiores que R$ 100,00 exigem nota.
 
-**Texto original:** "Colaborador em viagem tem limites ampliados em 50%."
+**Justificativa:** “acima” é uma comparação estrita; “a partir de” incluiria a
+fronteira.
 
-**O que não estava claro:** Não há campo de entrada indicando se o colaborador está em viagem. Sem critério, não há forma de aplicar a regra.
+**Regra afetada:** RN-005.
 
-**Decisão:** **Descartamos esta regra neste MVP.** Sem campo de entrada `em_viagem` na estrutura JSON, não é possível determinar quando aplicar. Entra no envelope (Dia 2).
+### AMB-004 — Base da verificação de nota fiscal
 
-**Justificativa:** SDD exige que a spec seja implementável com a entrada disponível. Requisitos sem dados de entrada são não-executáveis. Registrar agora evita tentativa de adivinhar.
+**Texto original do RH:** “Nota fiscal é obrigatória acima de R$ 100.”
 
-**Regra afetada:** (nenhuma nesta versão — será AMB-X no envelope)
+**O que não está claro:** comparar o valor solicitado ou o valor já reduzido pelo
+limite da categoria.
 
----
+**Decisão:** comparar o valor solicitado normalizado, antes de aplicar limites.
 
-### AMB-005 — Duplicatas — qual deve ser rejeitada?
+**Justificativa:** a obrigação documental diz respeito à despesa realizada, não
+ao montante que a empresa decide reembolsar.
 
-**Texto original:** "Duplicatas devem ser tratadas."
+**Regra afetada:** RN-005.
 
-**O que não estava claro:** Se é rejeitar ambas, rejeitar a segunda, ou alguma heurística diferente.
+### AMB-005 — Identificação de viagem
 
-**Decisão:** A primeira ocorrência é aceita (ou processada normalmente); a segunda e subsequentes são rejeitadas como duplicatas.
+**Texto original do RH:** “Colaborador em viagem tem limites ampliados em 50%.”
 
-**Justificativa:** Lançamento duplo acidental é comum; preservar a primeira entrada é mais conservador. Colaborador pode investigar e corrigir.
+**O que não está claro:** o que caracteriza viagem e como identificá-la sem um
+campo de entrada.
 
-**Regra afetada:** RN-008
+**Decisão:** com o contrato atual, nenhum item recebe ampliação.
 
----
+**Justificativa:** aplicar 50% com base em descrição, fornecedor ou categoria
+seria inventar um fato não informado.
 
-### AMB-006 — Hospedagem — por noite ou por dia?
+**Regra afetada:** RN-011.
 
-**Texto original:** "Hospedagem tem limite de R$ 250 por diária."
+### AMB-006 — Quantidade de diárias
 
-**O que não estava claro:** Se "diária" é por noite (período noturno) ou por dia (00:00 a 23:59). Alguns sistemas contam diferente.
+**Texto original do RH:** “Hospedagem tem limite de R$ 250 por diária.”
 
-**Decisão:** Uma diária = uma noite. Se descrito como "2 diárias", divide-se o valor por 2 noites.
+**O que não está claro:** a entrada não contém quantidade de diárias, embora a
+descrição possa mencionar noites.
 
-**Justificativa:** "Diária" na hotelaria é a noite de pernoite. Padrão de mercado.
+**Decisão:** cada lançamento representa uma diária; a descrição não é usada para
+extrair quantidade.
 
-**Regra afetada:** RN-003
+**Justificativa:** texto livre não é um contrato confiável para cálculo e pode
+conter números sem relação com a quantidade de diárias.
 
----
+**Regra afetada:** RN-009.
 
-### AMB-007 — Estornos — negativo gera crédito?
+### AMB-007 — Critério de duplicidade
 
-**Texto original:** "Duplicatas devem ser tratadas." (implicitamente, há tratamento para ajustes/estornos)
+**Texto original do RH:** “Duplicatas devem ser tratadas.”
 
-**O que não estava claro:** Se um estorno (valor negativo) pode criar "espaço" no limite de um dia para mais reembolsos, ou se é apenas uma redução visual.
+**O que não está claro:** quais campos tornam dois lançamentos duplicados.
 
-**Decisão:** Estornos reduzem o total consumido do limite do dia. Se um dia tem R$ 60,00 de alimentação e depois um estorno de -R$ 20,00, o consumo efetivo passa a R$ 40,00, liberando R$ 20,00 para mais reembolsos naquele dia.
+**Decisão:** mesma data, categoria, descrição, fornecedor e valor, comparados
+após as normalizações declaradas.
 
-**Justificativa:** Mais justo com o colaborador e reflete a realidade operacional (estorno é uma correção).
+**Justificativa:** o ID identifica o lançamento, não a transação; os demais
+campos formam uma identidade de negócio suficientemente conservadora.
 
-**Regra afetada:** RN-006
+**Regra afetada:** RN-006.
 
----
+### AMB-008 — Tratamento de duplicatas
 
-### AMB-008 — Sensibilidade a maiúsculas/minúsculas na categoria
+**Texto original do RH:** “Duplicatas devem ser tratadas.”
 
-**Texto original:** (não explicitado na política)
+**O que não está claro:** rejeitar todas, somar uma vez ou escolher uma ocorrência.
 
-**O que não estava claro:** Se "ALIMENTACAO" (maiúscula) é o mesmo que "alimentacao" (minúscula).
+**Decisão:** processar a primeira ocorrência e rejeitar as posteriores.
 
-**Decisão:** Categorias são **case-insensitive**. "ALIMENTACAO", "Alimentacao" e "alimentacao" são tratadas como a mesma categoria.
+**Justificativa:** preserva uma solicitação legítima e impede pagamento repetido
+no mesmo lote.
 
-**Justificativa:** Evita rejeições por erro de tipagem do usuário. Normalização de dados é padrão em sistemas.
+**Regra afetada:** RN-006.
 
-**Regra afetada:** RN-009
+### AMB-009 — Valores negativos e zero
 
----
+**Texto original do RH:** a política não menciona estornos, mas a entrada de
+referência contém um valor negativo.
 
-### AMB-009 — Precisão monetária — quantas casas decimais?
+**O que não está claro:** se o valor reduz limites, reduz o total ou cria crédito.
 
-**Texto original:** (não explicitado)
+**Decisão:** valor não positivo é rejeitado e tem contribuição monetária zero.
 
-**O que não estava claro:** Se valores como R$ 33,333 (três casas decimais) são aceitos ou arredondados.
+**Justificativa:** não há vínculo com uma despesa original que permita aplicar o
+estorno com segurança.
 
-**Decisão:** Valores são aceitos com até 2 casas decimais (centavos). Valores com mais casas decimais são arredondados para cima (teto) para 2 casas.
+**Regra afetada:** RN-004.
 
-**Justificativa:** Centavos são a unidade mínima de moeda brasileira. Arredondar para cima protege o colaborador.
+### AMB-010 — Capitalização das categorias
 
-**Regra afetada:** (impacta todos os cálculos)
+**Texto original do RH:** a política nomeia categorias, mas não define formato.
 
----
+**O que não está claro:** se `ALIMENTACAO` é diferente de `alimentacao`.
 
-### AMB-010 — Hospedagem — como interpretar "2 diárias" no descritivo?
+**Decisão:** espaços externos e capitalização são ignorados; acentos, grafias e
+sinônimos não são corrigidos.
 
-**Texto original:** "Hospedagem tem limite de R$ 250 por diária."
+**Justificativa:** capitalização não muda o significado, enquanto corrigir grafia
+ou sinônimos exigiria uma lista não fornecida.
 
-**O que não estava claro:** Como o sistema detecta que uma despesa de hospedagem se refere a múltiplas noites. A entrada não tem campo estruturado para isso.
+**Regra afetada:** RN-003.
 
-**Decisão:** Na versão MVP, o sistema **não** interpreta automaticamente texto descritivo. Hospedagem de valor V é considerada 1 noite, e comparada contra R$ 250. Se o lançador deseja reembolsar 2 noites, deve lançar 2 despesas separadas ou lançar já convertido (ex: R$ 500 como "2 × R$ 250").
+### AMB-011 — Precisão e arredondamento
 
-**Justificativa:** Parsing automático de texto livre é frágil e ambíguo. A entrada deve ser estruturada. Isso vai mudar no envelope (Dia 2) se for requisitado.
+**Texto original do RH:** a política usa centavos, mas não define valores com
+frações menores; a entrada contém R$ 33,333.
 
-**Regra afetada:** RN-003
+**O que não está claro:** rejeitar, truncar ou arredondar, e em qual momento.
 
----
+**Decisão:** arredondar cada valor para centavos, pelo meio para longe de zero,
+antes das demais regras.
 
-## 7. Casos de borda
+**Justificativa:** preserva a unidade monetária e evita que a ordem das operações
+mude o resultado.
 
-| Caso | Entrada | Comportamento esperado | Regra |
+**Regra afetada:** RN-012.
+
+### AMB-012 — Distribuição do limite diário
+
+**Texto original do RH:** a política não diz qual item recebe o limite quando o
+total diário excede o teto.
+
+**O que não está claro:** usar ordem da entrada, menor valor, maior valor ou rateio.
+
+**Decisão:** consumir o limite na ordem dos lançamentos recebidos.
+
+**Justificativa:** é determinístico, auditável e não inventa prioridade por valor.
+
+**Regra afetada:** RN-010.
+
+### AMB-013 — Fronteiras da competência
+
+**Texto original do RH:** “Despesas devem ser lançadas dentro do período de
+competência.”
+
+**O que não está claro:** se as datas inicial e final pertencem ao período e qual
+dos três campos do período é a referência operacional.
+
+**Decisão:** usar o intervalo fechado `inicio`–`fim` e exigir que ele seja
+coerente com `competencia`.
+
+**Justificativa:** os campos de data fornecem fronteiras verificáveis; validar a
+competência evita contratos contraditórios.
+
+**Regras afetadas:** RN-001 e RN-002.
+
+### AMB-014 — Fins de semana e plantões
+
+**Texto original do RH:** a política não restringe dias da semana; a entrada cita
+“sábado — plantão”.
+
+**O que não está claro:** se fins de semana precisam de tratamento especial.
+
+**Decisão:** dia da semana, feriado e plantão não alteram elegibilidade nem limite.
+
+**Justificativa:** criar uma restrição ausente recusaria despesas sem base na
+política recebida.
+
+**Regras afetadas:** RN-007 a RN-010.
+
+### AMB-015 — Precedência entre recusas
+
+**Texto original do RH:** várias regras podem atingir o mesmo item, mas a política
+não define qual justificativa prevalece.
+
+**O que não está claro:** por exemplo, um item pode ser duplicado, sem nota e fora
+da competência ao mesmo tempo.
+
+**Decisão:** aplicar a ordem da seção 9 e registrar como motivo principal a
+primeira causa terminal encontrada.
+
+**Justificativa:** uma precedência explícita torna o resultado determinístico e
+permite reproduzir a decisão.
+
+**Regras afetadas:** RN-002 a RN-010.
+
+## 8. Casos de borda
+
+| Caso | Entrada | Resultado esperado | Regras |
 |---|---|---|---|
-| Duas refeições no mesmo dia | 2026-07-03: R$ 72,50 + R$ 38,00 | Total no dia = R$ 110,50; reembolso = R$ 60,00; rejeitado = R$ 50,50 | RN-001, RN-004 |
-| Despesa exatamente no limite | 2026-07-06: R$ 60,00 (alimentação) | Reembolso integral = R$ 60,00 | RN-001 |
-| Despesa de R$ 100,00 sem nota | 2026-07-06: R$ 100,00 (transporte) | Aceita (não ultrapassa R$ 100) | RN-005 |
-| Despesa de R$ 100,01 sem nota | 2026-07-06: R$ 100,01 (transporte) | Rejeitada (exige nota fiscal) | RN-005 |
-| Duplicata exata | d-006 e d-007 no exemplo | d-006 aceita, d-007 rejeitada | RN-008 |
-| Categoria inválida | 2026-07-07: "coworking" | Rejeitada | RN-009 |
-| Fora do período | 2026-04-15 (período é julho) | Rejeitada | RN-007 |
-| Estorno | 2026-07-11: -R$ 45,00 (transporte) | Reduz consumo do dia; se houver espaço, libera reembolso | RN-006 |
-| Categoria MAIÚSCULA | 2026-07-31: "ALIMENTACAO" | Tratada como "alimentacao" | RN-009 |
-| Valor com 3 casas decimais | R$ 33,333 | Arredondado para R$ 33,34 | AMB-009 |
-| Hospedagem múltiplas noites (texto) | "Airbnb 3 noites" R$ 690 | MVP: tratado como 1 noite, comparado contra R$ 250, excedente rejeitado | RN-003, AMB-010 |
+| Limite compartilhado | Alimentação de R$ 72,50 e R$ 38,00 na mesma data | R$ 60,00 no total; primeiro item parcial e segundo rejeitado | RN-007, RN-010 |
+| Fronteira documental | R$ 100,00 sem nota | Não é recusada pela regra de nota | RN-005 |
+| Um centavo acima | R$ 100,01 sem nota | Rejeitada antes do limite de categoria | RN-005 |
+| Duplicata | `d-006` e `d-007` do exemplo | Primeira processada; segunda rejeitada | RN-006 |
+| Fora do período | 2026-04-15 em competência de julho | Rejeitada | RN-002 |
+| Valor negativo | R$ -45,00 | Rejeitada; contribuição zero aos totais | RN-004 |
+| Múltiplas noites em texto | Hospedagem de R$ 480,00 com “2 diárias” | Uma diária; R$ 250,00 reembolsáveis | RN-009 |
+| Categoria em maiúsculas | `ALIMENTACAO` | Tratada como `alimentacao` | RN-003 |
+| Fração de centavo | R$ 33,333 | Normalizada para R$ 33,33 | RN-012 |
+| Último dia | Despesa em `periodo.fim` | Data elegível | RN-002 |
+| Fim de semana | Alimentação em sábado | Mesmas regras de um dia útil | RN-007 |
+| Limite já esgotado | Segundo item após consumir todo o teto diário | Rejeitado com `LIMITE_ESGOTADO` | RN-010 |
 
----
+## 9. Ordem de aplicação das regras
 
-## 8. Ordem de aplicação das regras
+Para cada item, preservando a ordem da entrada:
 
-A sequência de processamento de cada despesa é:
+1. normalizar valor e textos usados nas comparações;
+2. rejeitar data fora da competência;
+3. rejeitar categoria não coberta;
+4. rejeitar valor não positivo;
+5. rejeitar ocorrência duplicada;
+6. rejeitar falta de nota fiscal quando obrigatória;
+7. aplicar o limite da categoria e o saldo diário, quando houver;
+8. produzir a decisão e atualizar os totais.
 
-1. **RN-007** — Verificar se está no período de competência. Se fora, REJEITAR e parar.
-2. **RN-009** — Verificar se a categoria é válida. Se inválida, REJEITAR e parar.
-3. **RN-005** — Verificar se valor > R$ 100 sem nota fiscal. Se sim, REJEITAR e parar.
-4. **RN-008** — Verificar duplicata exata (data, categoria, valor, fornecedor). Se duplicata, REJEITAR e parar.
-5. **RN-001/RN-002/RN-003** — Aplicar limites diários (alimentação, transporte) ou por noite (hospedagem). REEMBOLSAR até o limite, REJEITAR excedente.
-6. **RN-006** — Se há estorno no mesmo dia, ajustar o total consumido e recalcular espaço disponível.
+Um item rejeitado não consome limite. A primeira ocorrência de uma assinatura de
+duplicidade é registrada após passar pelas regras 2 a 4; portanto, mesmo que seja
+recusada depois por falta de nota, uma repetição posterior continua sendo
+duplicata.
 
-**Nota:** Duas despesas no mesmo dia com a mesma categoria têm seus valores agregados antes de aplicar o limite. A ordem numérica das despesas determina qual vai primeiro no limite (FIFO — first in, first out).
+## 10. Critérios de aceite
 
----
+O sistema base está pronto quando:
 
-## 9. Critérios de aceite
+- [ ] aceita a interface `calcular --input <arquivo> --output <arquivo>`;
+- [ ] processa o arquivo de exemplo e gera 14 decisões na ordem original;
+- [ ] implementa RN-001 a RN-013 exatamente como descritas;
+- [ ] cobre cada ambiguidade AMB-001 a AMB-015 com decisão verificável;
+- [ ] produz saída conforme a seção 5 e com totais reconciliados;
+- [ ] não cria nem substitui o arquivo de saída quando a entrada é inválida;
+- [ ] retorna sucesso somente quando o resultado foi gravado por completo;
+- [ ] possui ao menos um teste automatizado por regra e por caso de borda;
+- [ ] pode ser executado e testado seguindo apenas o README.
 
-O sistema está pronto quando:
+## 11. Questões em aberto
 
-- [ ] Processa um arquivo JSON conforme `exemplos/despesas-exemplo.json` sem erros
-- [ ] Gera saída JSON com estrutura definida em seção 4, com todos os campos preenchidos
-- [ ] Rejeita despesas fora do período de competência (RN-007)
-- [ ] Rejeita categorias não-válidas (RN-009)
-- [ ] Rejeita despesas > R$ 100 sem nota fiscal (RN-005)
-- [ ] Detecta e rejeita duplicatas exatas (RN-008)
-- [ ] Aplica limite diário de R$ 60 para alimentação (RN-001)
-- [ ] Aplica limite diário de R$ 80 para transporte urbano (RN-002)
-- [ ] Aplica limite de R$ 250 por noite para hospedagem (RN-003)
-- [ ] Reembolsa parcialmente até o limite, rejeita excedente (RN-004)
-- [ ] Processa estornos, reduzindo consumo do dia (RN-006)
-- [ ] Normaliza categorias para minúsculas (AMB-008)
-- [ ] Arredonda valores monetários para 2 casas decimais (AMB-009)
-- [ ] Testes automatizados cobrem no mínimo um caso por regra
-- [ ] Documentação está conforme spec.md, plan.md, tasks.md
+- A política prevê ampliação em viagem, mas o contrato fixo não fornece esse dado.
+  Nesta versão aplica-se RN-011. Uma futura mudança do contrato deverá primeiro
+  alterar esta spec e registrar impactos no `DECISIONS.md`.
+- A entrada não informa quantidade de diárias. Nesta versão aplica-se RN-009. A
+  decisão deve ser revista se surgir um campo estruturado para a quantidade.
 
----
-
-## 10. O que fica em aberto
-
-1. **Mudança de requisito esperada (envelope Dia 2):** Campo `em_viagem` deve ser adicionado à entrada JSON. Quando presente e true, os limites diários devem ser aumentados em 50% (exceto hospedagem, que fica em R$ 250). Esta mudança vai gerar novas tasks e pode afetar a ordem de aplicação das regras.
-
-2. **Hospedagem com múltiplas noites — versão futura:** Caso o envelope exija parsing inteligente de "N diárias" ou "N noites" no campo descritivo, a spec vai mudar. MVP assume 1 noite por lançamento.
-
-3. **Integração com terceiros:** Se houver integração com sistema de folha de pagamento ou banco de dados para validar centros de custo, isso entra como fase 2.
-
-4. **Auditoria detalhada:** Versão futura pode incluir log de quem processou, quando, e com qual versão da política. Não está no MVP.
-
----
-
-**Próximo passo:** Ver `plan.md` para decisões técnicas de implementação.
