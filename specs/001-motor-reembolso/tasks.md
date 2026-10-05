@@ -7,95 +7,95 @@ provam seu aceite. Marcar `[x]` e preencher o hash somente depois de verificar.
 
 ## Fase 1 — Fundação
 
-- [ ] **T-001 — Criar núcleo monetário e estruturas de domínio**
+- [x] **T-001 — Criar núcleo monetário e estruturas de domínio**
   - **Atende:** RN-012, AMB-011
   - **Entrega:** pacote executável, estruturas de entrada/decisão e funções de
     normalização/formatação de valores.
   - **Aceite:** `test_rn012_arredonda_meio_para_longe_de_zero` e
     `test_rn012_formata_duas_casas` passam.
-  - **Commit:** —
+  - **Commit:** `0e4af2b`
 
-- [ ] **T-002 — Ler e validar o contrato completo de entrada**
+- [x] **T-002 — Ler e validar o contrato completo de entrada**
   - **Atende:** RN-001, AMB-013
   - **Entrega:** leitura decimal, validação de campos, datas, competência e IDs.
   - **Aceite:** `test_rn001_carrega_exemplo_valido`,
     `test_rn001_rejeita_id_repetido` e
     `test_rn001_rejeita_periodo_incoerente` passam.
-  - **Commit:** —
+  - **Commit:** `a64cf45`
 
 ## Fase 2 — Elegibilidade
 
-- [ ] **T-003 — Aplicar competência, categoria e valor positivo**
+- [x] **T-003 — Aplicar competência, categoria e valor positivo**
   - **Atende:** RN-002, RN-003, RN-004, RN-011; AMB-005, AMB-009, AMB-010,
     AMB-013 e AMB-014
   - **Entrega:** primeiras decisões terminais e normalização controlada de
     categoria.
   - **Aceite:** testes `test_rn002_*`, `test_rn003_*`, `test_rn004_*` e
     `test_rn011_sem_dado_nao_amplia_limite` passam.
-  - **Commit:** —
+  - **Commit:** `e07f916`
 
-- [ ] **T-004 — Detectar duplicatas e exigir nota na precedência correta**
+- [x] **T-004 — Detectar duplicatas e exigir nota na precedência correta**
   - **Atende:** RN-005, RN-006; AMB-003, AMB-004, AMB-007, AMB-008 e AMB-015
   - **Entrega:** assinatura canônica, memória da primeira ocorrência e
     verificação documental sobre o valor solicitado.
   - **Aceite:** `test_rn005_fronteira_nota`, `test_rn006_primeira_ocorrencia`,
     `test_amb007_normaliza_assinatura` e `test_amb015_duplicata_precede_nota`
     passam.
-  - **Commit:** —
+  - **Commit:** `772d0f7`
 
 ## Fase 3 — Limites e decisões
 
-- [ ] **T-005 — Aplicar limites diários e alocação por ordem**
+- [x] **T-005 — Aplicar limites diários e alocação por ordem**
   - **Atende:** RN-007, RN-008, RN-010; AMB-001, AMB-002 e AMB-012
   - **Entrega:** saldos separados por data/categoria e estados aprovada, parcial
     e limite esgotado.
   - **Aceite:** `test_rn007_limite_alimentacao_compartilhado`,
     `test_rn008_limite_transporte_por_data` e
     `test_rn010_aloca_na_ordem_de_entrada` passam.
-  - **Commit:** —
+  - **Commit:** `8ea1319`
 
-- [ ] **T-006 — Aplicar limite de hospedagem por lançamento**
+- [x] **T-006 — Aplicar limite de hospedagem por lançamento**
   - **Atende:** RN-009, RN-010; AMB-002 e AMB-006
   - **Entrega:** limite independente de R$ 250,00 para cada hospedagem elegível,
     sem interpretar a descrição.
   - **Aceite:** `test_rn009_cada_item_e_uma_diaria` e
     `test_amb006_nao_extrai_noites_da_descricao` passam.
-  - **Commit:** —
+  - **Commit:** `6e2619f`
 
-- [ ] **T-007 — Produzir decisões e resumo reconciliado**
+- [x] **T-007 — Produzir decisões e resumo reconciliado**
   - **Atende:** RN-013 e contrato de saída da seção 5
   - **Entrega:** montagem do resultado, códigos estáveis, justificativas e totais.
   - **Aceite:** `test_rn013_preserva_ordem_e_reconcilia_totais` e
     `test_saida_obedece_schema_da_spec` passam.
-  - **Commit:** —
+  - **Commit:** `03d776b`
 
 ## Fase 4 — Interface e integração
 
-- [ ] **T-008 — Implementar a CLI e gravação segura**
+- [x] **T-008 — Implementar a CLI e gravação segura**
   - **Atende:** RN-001 e critérios de aceite da seção 10
   - **Entrega:** comando `calcular --input --output`, códigos de saída e gravação
     que não deixa resultado parcial.
   - **Aceite:** `test_cli_calcular_cria_saida` e
     `test_cli_entrada_invalida_preserva_destino` passam.
-  - **Commit:** —
+  - **Commit:** `b11bfd7`
 
-- [ ] **T-009 — Fechar cenário de integração do arquivo de exemplo**
+- [x] **T-009 — Fechar cenário de integração do arquivo de exemplo**
   - **Atende:** RN-001 a RN-013 e casos de borda da seção 8
   - **Entrega:** teste com `exemplos/despesas-exemplo.json` e resultado esperado
     calculado a partir da spec.
   - **Aceite:** `test_integracao_exemplo_gera_14_decisoes_e_totais_exatos` passa
     junto com toda a suíte.
-  - **Commit:** —
+  - **Commit:** `bf692b5`
 
 ## Fase 5 — Documentação e evidências
 
-- [ ] **T-010 — Documentar execução e convenções do agente**
+- [x] **T-010 — Documentar execução e convenções do agente**
   - **Atende:** critérios de aceite da seção 10 e entregáveis do desafio
   - **Entrega:** `README.md` executável e `CLAUDE.md` curto, apontando para a spec
     como fonte da verdade, sem identificar modelo de IA.
   - **Aceite:** uma pessoa em checkout limpo consegue executar o exemplo e os
     testes apenas com os comandos documentados.
-  - **Commit:** —
+  - **Commit:** `3caacda`
 
 - [ ] **T-011 — Registrar sessões e preparar evidências do relatório**
   - **Atende:** critério “Relatório e discernimento” da rubrica
