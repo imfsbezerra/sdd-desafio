@@ -97,13 +97,13 @@ provam seu aceite. Marcar `[x]` e preencher o hash somente depois de verificar.
     testes apenas com os comandos documentados.
   - **Commit:** `3caacda`
 
-- [ ] **T-011 — Registrar sessões e preparar evidências do relatório**
+- [x] **T-011 — Registrar sessões e preparar evidências do relatório**
   - **Atende:** critério “Relatório e discernimento” da rubrica
   - **Entrega:** registros de sessão existentes, lacunas declaradas e rascunho do
     relatório com referências verificáveis aos commits.
   - **Aceite:** `docs/sessions/` contém ao menos um registro desta etapa e o caso
     concreto do rascunho contraditório aponta para `05a079f` e `e6e4d3b`.
-  - **Commit:** —
+  - **Commit:** `387176d`
 
 ## Fase 6 — Envelope (Dia 2)
 
