@@ -1,153 +1,163 @@
 # Plano Técnico — Motor de Cálculo de Reembolso
 
-**Versão:** 1.0 · **Baseado na spec:** 1.1 · **Data:** 2026-10-05
+**Versão:** 2.0 · **Baseado na spec:** 2.0 / Política v4 · **Data:** 2026-10-05
 
-> Este documento define como implementar a spec. Nenhuma regra de negócio nova
-> deve nascer aqui.
+## 1. Resultado pretendido
 
-## 1. Stack
+Absorver os itens obrigatórios A e B do envelope sem reescrever o núcleo: carregar
+política e câmbio externos, converter cada item para BRL e reutilizar a sequência
+de elegibilidade, nota, duplicidade, limites e resumo.
 
-| Escolha | Decisão | Por quê | Alternativa descartada |
-|---|---|---|---|
-| Linguagem | Python 3.11+ | Legibilidade, boa biblioteca padrão e execução simples | Node.js: também serviria, mas exigiria configurar pacote para um domínio pequeno |
-| CLI | `argparse` da biblioteca padrão | Suporta a interface fixa sem dependência externa | Click: ergonomia boa, mas acrescenta instalação sem benefício necessário |
-| JSON e datas | Biblioteca padrão | O contrato é pequeno e estável | Validador externo: custo adicional e mensagens pouco controladas |
-| Dinheiro | `Decimal`, com leitura decimal direta do JSON | Evita aritmética binária e preserva a regra RN-012 | `float`: pode introduzir resíduos; centavos inteiros: complica o valor original com mais de 2 casas |
-| Testes | `unittest` da biblioteca padrão | Roda sem instalar pacotes | pytest: mais conciso, porém desnecessário para o prazo e escopo |
+O item C não será implementado nesta rodada.
 
-Não haverá dependências de produção nem de teste fora da distribuição do Python.
-
-## 2. Arquitetura
+## 2. Impacto na arquitetura existente
 
 ```text
-arquivo JSON
-    ↓
-leitura decimal → validação do contrato → motor puro → montagem do resultado
-                                                            ↓
-                                                     gravação atômica JSON
+politica-v4.json ─→ validação da política ─┐
+                                           ├→ motor puro → resultado v4
+cambio.json ──────→ validação das taxas ───┤      ↑
+                                           │      │
+despesas.json ────→ validação da entrada ──┘   valores BRL
+                                                   ↓
+                                            gravação atômica
 ```
 
-- `src/cli.py`: argumentos, códigos de saída e mensagens para o usuário;
-- `src/io_json.py`: leitura, validação estrutural e gravação segura;
-- `src/model.py`: estruturas internas de entrada e decisão;
-- `src/money.py`: normalização e formatação monetária;
-- `src/engine.py`: ordem das regras, duplicidade, limites e resumo;
-- `tests/`: testes unitários do núcleo e testes ponta a ponta da CLI.
-
-O núcleo recebe dados já validados e devolve um objeto de resultado sem acessar
-arquivos, relógio ou terminal. Isso mantém as regras testáveis e reduz o custo de
-uma futura mudança de política.
-
-## 3. Modelo de dados interno
-
-### Entrada validada
-
-- `Colaborador`: `id`, `nome`, `centro_custo`;
-- `Periodo`: `competencia`, `inicio`, `fim` como datas;
-- `Despesa`: posição original, campos recebidos, valor original decimal, valor
-  normalizado e textos canônicos usados apenas em comparações;
-- `Solicitacao`: colaborador, período e lista ordenada de despesas.
-
-### Resultado
-
-- `Decisao`: ID, status, quatro valores monetários, código, justificativa e IDs de
-  regras;
-- `Resumo`: totais monetários e contagens por status;
-- `Resultado`: versão da política, dados copiados, resumo e decisões ordenadas.
-
-Os objetos internos usam `Decimal`; somente na fronteira de saída os valores são
-convertidos para textos com duas casas.
-
-## 4. Representação da política
-
-Limites e versão da política ficam centralizados em dados imutáveis no módulo do
-motor:
-
-| Chave | Valor |
-|---|---:|
-| `alimentacao` | R$ 60,00 por data |
-| `transporte_urbano` | R$ 80,00 por data |
-| `hospedagem` | R$ 250,00 por item |
-| nota fiscal | acima de R$ 100,00 |
-
-A ordem das validações permanece explícita em uma única rotina de avaliação, pois
-ela é comportamento observável definido na seção 9 da spec.
-
-## 5. Decisões técnicas
-
-### DT-001 — Somente biblioteca padrão
-
-**Contexto:** a ferramenta precisa ser reproduzível em ambiente de correção.
-
-**Decisão:** usar somente módulos da biblioteca padrão.
-
-**Alternativa descartada:** framework de modelos e CLI; reduziria código local,
-mas criaria etapa de instalação e risco de versão.
-
-**Consequência:** validações serão escritas no projeto, porém execução e testes
-não dependem de rede.
-
-### DT-002 — Núcleo funcional e I/O separado
-
-**Contexto:** regras serão alteradas no segundo dia e precisam de testes rápidos.
-
-**Decisão:** o motor não lê nem grava arquivos e não encerra o processo.
-
-**Alternativa descartada:** concentrar CLI, parsing e cálculo em um único módulo;
-seria menor no início, mas tornaria testes e mudanças acoplados.
-
-**Consequência:** testes de regra constroem entradas em memória; poucos testes E2E
-cobrem as fronteiras.
-
-### DT-003 — Saída gravada de forma atômica
-
-**Contexto:** RN-001 proíbe resultado parcial e a CLI pode falhar ao serializar ou
-gravar.
-
-**Decisão:** gerar todo o conteúdo antes e substituir o destino somente após uma
-gravação temporária bem-sucedida no mesmo diretório.
-
-**Alternativa descartada:** escrever diretamente no destino; uma falha poderia
-deixar JSON truncado.
-
-**Consequência:** erro preserva um arquivo anterior e facilita afirmar que sucesso
-significa resultado completo.
-
-### DT-004 — Erros de entrada agregados quando possível
-
-**Contexto:** RN-001 exige localizar o campo ou a condição inválida.
-
-**Decisão:** validar toda a estrutura e devolver uma lista curta de problemas,
-mantendo caminhos como `despesas[2].valor`.
-
-**Alternativa descartada:** parar no primeiro campo; implementação menor, mas pior
-para quem precisa corrigir o documento.
-
-**Consequência:** a CLI usa código de saída 2 para uso/entrada inválida e 1 para
-falha operacional inesperada.
-
-## 6. Estratégia de testes
-
-- testes unitários para dinheiro, contrato, assinatura de duplicidade, precedência
-  e cada RN-001 a RN-013;
-- testes parametrizados por subtestes para fronteiras de data, nota e dinheiro;
-- teste de integração do arquivo de exemplo com as 14 decisões e totais exatos;
-- testes ponta a ponta chamando a CLI em diretório temporário;
-- teste de erro garantindo que destino anterior não seja sobrescrito.
-
-Nomenclatura: `test_rnNNN_<comportamento>` e, quando útil,
-`test_ambNNN_<decisao>`. A matriz no fim de `tasks.md` liga regra, task e teste.
-
-Não haverá meta numérica isolada de cobertura. A condição é cada regra e cada caso
-de borda possuir uma asserção relevante, além de todo o conjunto passar.
-
-## 7. Riscos
-
-| Risco | Probabilidade | Mitigação |
+| Componente | Absorve de graça | Precisa mudar |
 |---|---|---|
-| Serializar `Decimal` incorretamente | Média | Converter apenas na camada de saída e testar valores com 3 casas |
-| Divergência entre precedência e testes | Média | Um teste com item atingido por múltiplas recusas |
-| Totais não reconciliarem com valor negativo | Média | Centralizar contribuição positiva e testar RN-004/RN-013 juntas |
-| Mudança futura exigir novo dado de entrada | Alta | Manter validação, modelo e motor separados |
-| Mensagens humanas virarem base de decisão | Baixa | Usar `codigo_motivo` estável para testes e consumo automático |
+| Leitura JSON decimal | Preserva taxas e valores | Validar dois contratos novos |
+| Modelo de despesa | Ordem e valor original já existem | Adicionar moeda |
+| Motor puro | Precedência, decisões e saldos | Receber política/câmbio e remover constantes |
+| Dinheiro | `Decimal` e arredondamento já existem | Multiplicar e registrar conversão |
+| Duplicidade | Função isolada | Incluir moeda na assinatura |
+| Nota fiscal | Etapa isolada | Limiar externo e valor BRL |
+| Limites | Saldo por chave já existe | Categoria, periodicidade e limite dirigidos por dados |
+| Saída | Serialização centralizada | Identificar política e conversão |
+| CLI | Parsing e escrita atômica já existem | Duas opções com defaults externos |
+
+## 3. Stack
+
+Mantém-se Python 3.11+ somente com biblioteca padrão, `Decimal` para todos os
+valores e `unittest` para testes. Não há razão técnica trazida pelo envelope para
+introduzir dependências.
+
+## 4. Novos modelos
+
+- `RegraCategoria`: limite decimal e periodicidade;
+- `Politica`: versão, vigência, moeda-base, tabela padrão, tabelas por centro,
+  limiar de nota e percentual de viagem;
+- `TabelaSelecionada`: origem (`centro_custo`/`padrao`) e mapa de categorias;
+- `Cambio`: moeda-base e taxas por data/moeda;
+- `Conversao`: moeda original, taxa, data da taxa e valor BRL, ou ausência de
+  cotação;
+- `Despesa`: acrescenta `moeda`, já normalizada para três letras.
+
+Objetos de política e câmbio são imutáveis depois da validação. O motor recebe os
+dois explicitamente, sem estado global nem cache.
+
+## 5. Fluxo técnico
+
+1. CLI resolve os caminhos `--politica` e `--cambio` ou usa os defaults em
+   `exemplos/envelope/`.
+2. Leitor carrega decimais e valida política e câmbio por inteiro.
+3. Solicitação é validada também contra a vigência da política.
+4. Motor seleciona uma única tabela pelo centro de custo.
+5. Para cada despesa, busca a taxa exata ou percorre datas anteriores em ordem
+   decrescente para a mesma moeda.
+6. Converte e arredonda o valor BRL.
+7. Aplica categoria, valor, duplicidade, nota, periodicidade e limite.
+8. Monta saída v4 e grava atomicamente.
+
+## 6. Decisões técnicas
+
+### DT-005 — Configuração injetada no motor
+
+**Decisão:** funções de processamento recebem `Politica` e `Cambio` como
+argumentos.
+
+**Alternativa descartada:** constantes globais ou leitura de arquivo dentro do
+motor.
+
+**Consequência:** testes constroem políticas pequenas em memória e mudanças de
+arquivo não contaminam outras execuções.
+
+### DT-006 — Validação dedicada das fontes externas
+
+**Decisão:** erros da política e do câmbio usam a mesma família de erro de entrada,
+com caminhos como `politica.centros_custo.X` e `cambio.taxas.2026-07-14.EUR`.
+
+**Alternativa descartada:** aceitar configuração parcial e falhar durante um item.
+
+**Consequência:** erro estrutural impede resultado; ausência legítima de uma moeda
+continua sendo decisão por item, conforme RN-008.
+
+### DT-007 — Busca determinística da taxa
+
+**Decisão:** para moeda estrangeira, filtrar datas `<= data_despesa` que tenham a
+moeda e escolher a maior data.
+
+**Alternativa descartada:** retroceder dia a dia ou usar a próxima taxa.
+
+**Consequência:** funciona mesmo com lacunas longas e nunca usa conhecimento
+futuro.
+
+### DT-008 — Periodicidade dirigida pela política
+
+**Decisão:** `dia` usa saldo por `(data, categoria)`; `diaria` aplica limite por
+item. Categoria de limite zero termina antes de alocação.
+
+**Alternativa descartada:** condicionais fixas para alimentação, transporte,
+hospedagem e representação.
+
+**Consequência:** novas categorias com periodicidades conhecidas entram apenas no
+arquivo externo.
+
+### DT-009 — Compatibilidade da interface
+
+**Decisão:** manter `--input` e `--output` obrigatórios e adicionar `--politica` e
+`--cambio` opcionais, com caminhos padrão versionados.
+
+**Alternativa descartada:** tornar os dois novos parâmetros obrigatórios, o que
+quebraria o comando fixo do desafio.
+
+**Consequência:** o comando antigo passa a calcular o mesmo arquivo sob a v4, e
+ambientes externos podem fornecer configurações diferentes.
+
+## 7. Estratégia de testes
+
+- validação isolada de política e câmbio, incluindo limite zero e periodicidade;
+- seleção de centro conhecido/desconhecido e categoria ausente;
+- moeda default, normalização e assinatura de duplicidade;
+- conversão exata, último dia anterior, GBP sem taxa e arredondamento;
+- nota fiscal depois da conversão;
+- periodicidade genérica `dia`/`diaria` e limite zero;
+- integração exata dos dois arquivos do envelope;
+- regressão do exemplo v3 recalculado pela v4;
+- CLI com defaults, caminhos explícitos e preservação do destino em configuração
+  inválida.
+
+Cada teste novo usa `test_rnNNN_` ou `test_ambNNN_`. A suíte v3 será atualizada
+apenas quando o comportamento foi deliberadamente substituído pela v4.
+
+## 8. Ordem de execução
+
+1. T-012: contratos externos;
+2. T-013: moeda e conversão;
+3. T-014: política dinâmica;
+4. T-015: orquestração e saída;
+5. T-016: CLI;
+6. T-017: integrações e regressão;
+7. T-018: documentação e relatório.
+
+Cada task termina com suíte completa verde e commit próprio antes da seguinte.
+
+## 9. Riscos
+
+| Risco | Mitigação |
+|---|---|
+| Resultado v3 mudar silenciosamente | Teste de regressão com novos números explícitos |
+| Fallback misturar centro e padrão | Testes separados para centro ausente e categoria ausente |
+| Nota ser comparada antes da conversão | Teste USD 40 sem nota → BRL 220 |
+| Fim de semana usar taxa futura | Teste fixa data da taxa em 17/07 |
+| Item sem taxa quebrar totais | Campo `quantidade_sem_conversao` e reconciliação apenas dos convertidos |
+| Configuração inválida deixar saída parcial | Reutilizar gravação atômica e testar preservação |
 
