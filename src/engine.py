@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from src.model import Decisao, Despesa, Periodo, Status
-from src.money import ZERO
+from src.model import Decisao, Despesa, Periodo, Solicitacao, Status
+from src.money import ZERO, formatar_original, formatar_valor
 
 
 CATEGORIAS = frozenset({"alimentacao", "transporte_urbano", "hospedagem"})
@@ -225,6 +225,80 @@ def aplicar_limite_hospedagem(despesa: Despesa) -> Decisao:
         justificativa="Reembolso limitado a R$ 250,00 para uma diária de hospedagem.",
         regras_aplicadas=("RN-009", "RN-010"),
     )
+
+
+def processar_solicitacao(solicitacao: Solicitacao) -> dict[str, object]:
+    """Executa a precedência completa e monta o contrato de saída."""
+
+    decisoes: list[Decisao] = []
+    assinaturas: set[tuple[object, ...]] = set()
+    saldos: dict[tuple[object, str], Decimal] = {}
+
+    for despesa in solicitacao.despesas:
+        decisao = avaliar_elegibilidade_basica(despesa, solicitacao.periodo)
+        if decisao is None:
+            decisao = avaliar_duplicata_e_nota(despesa, assinaturas)
+        if decisao is None:
+            categoria = categoria_canonica(despesa)
+            if categoria == "hospedagem":
+                decisao = aplicar_limite_hospedagem(despesa)
+            else:
+                decisao = aplicar_limite_diario(despesa, saldos)
+        decisoes.append(decisao)
+
+    total_solicitado = sum(
+        (max(item.valor_normalizado, ZERO) for item in solicitacao.despesas),
+        start=ZERO,
+    )
+    total_reembolsavel = sum(
+        (item.valor_reembolsavel for item in decisoes), start=ZERO
+    )
+    total_nao_reembolsavel = total_solicitado - total_reembolsavel
+
+    return {
+        "politica_versao": "3",
+        "colaborador": {
+            "id": solicitacao.colaborador.id,
+            "nome": solicitacao.colaborador.nome,
+            "centro_custo": solicitacao.colaborador.centro_custo,
+        },
+        "periodo": {
+            "competencia": solicitacao.periodo.competencia,
+            "inicio": solicitacao.periodo.inicio.isoformat(),
+            "fim": solicitacao.periodo.fim.isoformat(),
+        },
+        "resumo": {
+            "quantidade_despesas": len(solicitacao.despesas),
+            "total_solicitado": formatar_valor(total_solicitado),
+            "total_reembolsavel": formatar_valor(total_reembolsavel),
+            "total_nao_reembolsavel": formatar_valor(total_nao_reembolsavel),
+            "quantidade_aprovadas": sum(
+                item.status is Status.APROVADA for item in decisoes
+            ),
+            "quantidade_parciais": sum(
+                item.status is Status.PARCIAL for item in decisoes
+            ),
+            "quantidade_rejeitadas": sum(
+                item.status is Status.REJEITADA for item in decisoes
+            ),
+        },
+        "decisoes": [_serializar_decisao(item) for item in decisoes],
+    }
+
+
+def _serializar_decisao(decisao: Decisao) -> dict[str, object]:
+    return {
+        "id": decisao.id,
+        "status": decisao.status.value,
+        "valor_original": formatar_original(decisao.valor_original),
+        "valor_normalizado": formatar_valor(decisao.valor_normalizado),
+        "valor_reembolsavel": formatar_valor(decisao.valor_reembolsavel),
+        "valor_nao_reembolsavel": formatar_valor(decisao.valor_nao_reembolsavel),
+        "codigo_motivo": decisao.codigo_motivo,
+        "justificativa": decisao.justificativa,
+        "regras_aplicadas": list(decisao.regras_aplicadas),
+    }
+
 
 
 
