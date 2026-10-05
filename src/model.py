@@ -59,6 +59,10 @@ class Decisao:
     codigo_motivo: str
     justificativa: str
     regras_aplicadas: tuple[str, ...]
+    moeda_original: str = "BRL"
+    taxa_cambio: Decimal | None = Decimal("1")
+    data_taxa_cambio: date | None = None
+    valor_convertido_brl: Decimal | None = None
 
 
 @dataclass(frozen=True)

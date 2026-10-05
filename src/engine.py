@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from decimal import Decimal
 
-from src.model import Decisao, Despesa, Periodo, Solicitacao, Status
+from src.model import (
+    Conversao,
+    Decisao,
+    Despesa,
+    Periodo,
+    Politica,
+    RegraCategoria,
+    Solicitacao,
+    Status,
+)
 from src.money import ZERO, formatar_original, formatar_valor
 
 
@@ -298,6 +308,196 @@ def _serializar_decisao(decisao: Decisao) -> dict[str, object]:
         "justificativa": decisao.justificativa,
         "regras_aplicadas": list(decisao.regras_aplicadas),
     }
+
+
+def selecionar_tabela(
+    politica: Politica, centro_custo: str
+) -> tuple[str, Mapping[str, RegraCategoria]]:
+    """Seleciona centro conhecido ou a tabela padrão inteira (RN-003)."""
+
+    if centro_custo in politica.centros_custo:
+        return "centro_custo", politica.centros_custo[centro_custo]
+    return "padrao", politica.padrao
+
+
+def assinatura_duplicidade_v4(despesa: Despesa) -> tuple[object, ...]:
+    return (
+        despesa.data,
+        categoria_canonica(despesa),
+        texto_canonico(despesa.descricao),
+        texto_canonico(despesa.fornecedor),
+        despesa.moeda,
+        despesa.valor_normalizado,
+    )
+
+
+def _rejeitar_v4(
+    despesa: Despesa,
+    conversao: Conversao,
+    codigo: str,
+    justificativa: str,
+    regras: tuple[str, ...],
+) -> Decisao:
+    valor_brl = conversao.valor_brl
+    nao_reembolsavel = (
+        max(valor_brl, ZERO) if valor_brl is not None else ZERO
+    )
+    return Decisao(
+        id=despesa.id,
+        status=Status.REJEITADA,
+        valor_original=despesa.valor_original,
+        valor_normalizado=despesa.valor_normalizado,
+        valor_reembolsavel=ZERO,
+        valor_nao_reembolsavel=nao_reembolsavel,
+        codigo_motivo=codigo,
+        justificativa=justificativa,
+        regras_aplicadas=regras,
+        moeda_original=despesa.moeda,
+        taxa_cambio=conversao.taxa,
+        data_taxa_cambio=conversao.data_taxa,
+        valor_convertido_brl=valor_brl,
+    )
+
+
+def avaliar_politica_e_documentos_v4(
+    despesa: Despesa,
+    conversao: Conversao,
+    tabela: Mapping[str, RegraCategoria],
+    politica: Politica,
+    assinaturas_vistas: set[tuple[object, ...]],
+) -> tuple[Decisao | None, RegraCategoria | None]:
+    """Aplica categoria, valor, duplicidade e nota conforme a Política v4."""
+
+    categoria = categoria_canonica(despesa)
+    regra = tabela.get(categoria)
+    if regra is None:
+        return (
+            _rejeitar_v4(
+                despesa,
+                conversao,
+                "CATEGORIA_NAO_COBERTA",
+                f"Categoria '{despesa.categoria}' ausente da tabela selecionada.",
+                ("RN-004",),
+            ),
+            None,
+        )
+    if regra.limite == ZERO:
+        return (
+            _rejeitar_v4(
+                despesa,
+                conversao,
+                "CATEGORIA_NAO_REEMBOLSAVEL",
+                f"Categoria '{categoria}' possui limite R$ 0,00 para o centro de custo.",
+                ("RN-004",),
+            ),
+            None,
+        )
+    if despesa.valor_normalizado <= ZERO:
+        return (
+            _rejeitar_v4(
+                despesa,
+                conversao,
+                "VALOR_NAO_POSITIVO",
+                "Valor igual a zero ou negativo não é reembolsável.",
+                ("RN-009",),
+            ),
+            None,
+        )
+
+    assinatura = assinatura_duplicidade_v4(despesa)
+    if assinatura in assinaturas_vistas:
+        return (
+            _rejeitar_v4(
+                despesa,
+                conversao,
+                "DUPLICATA",
+                "Lançamento posterior repete a transação na mesma moeda.",
+                ("RN-011",),
+            ),
+            None,
+        )
+    assinaturas_vistas.add(assinatura)
+
+    assert conversao.valor_brl is not None
+    if (
+        conversao.valor_brl > politica.nota_fiscal_acima_de
+        and not despesa.tem_nota_fiscal
+    ):
+        return (
+            _rejeitar_v4(
+                despesa,
+                conversao,
+                "NOTA_FISCAL_AUSENTE",
+                (
+                    "Nota fiscal obrigatória para valor convertido de "
+                    f"R$ {conversao.valor_brl:.2f}."
+                ),
+                ("RN-010",),
+            ),
+            None,
+        )
+    return None, regra
+
+
+def aplicar_limite_v4(
+    despesa: Despesa,
+    conversao: Conversao,
+    regra: RegraCategoria,
+    saldos: dict[tuple[object, str], Decimal],
+) -> Decisao:
+    """Aplica periodicidade e limite fornecidos pela tabela externa."""
+
+    assert conversao.valor_brl is not None
+    categoria = categoria_canonica(despesa)
+    if regra.periodicidade == "dia":
+        chave = (despesa.data, categoria)
+        saldo = saldos.setdefault(chave, regra.limite)
+        reembolsavel = min(conversao.valor_brl, saldo)
+        saldos[chave] = saldo - reembolsavel
+    else:
+        reembolsavel = min(conversao.valor_brl, regra.limite)
+
+    comum = {
+        "id": despesa.id,
+        "valor_original": despesa.valor_original,
+        "valor_normalizado": despesa.valor_normalizado,
+        "moeda_original": despesa.moeda,
+        "taxa_cambio": conversao.taxa,
+        "data_taxa_cambio": conversao.data_taxa,
+        "valor_convertido_brl": conversao.valor_brl,
+    }
+    if reembolsavel == conversao.valor_brl:
+        return Decisao(
+            **comum,
+            status=Status.APROVADA,
+            valor_reembolsavel=reembolsavel,
+            valor_nao_reembolsavel=ZERO,
+            codigo_motivo="APROVADA_INTEGRAL",
+            justificativa=(
+                f"Valor integral dentro do limite de R$ {regra.limite:.2f} "
+                f"por {regra.periodicidade}."
+            ),
+            regras_aplicadas=("RN-012",),
+        )
+    if reembolsavel > ZERO:
+        return Decisao(
+            **comum,
+            status=Status.PARCIAL,
+            valor_reembolsavel=reembolsavel,
+            valor_nao_reembolsavel=conversao.valor_brl - reembolsavel,
+            codigo_motivo="LIMITE_PARCIAL",
+            justificativa=(
+                f"Reembolso limitado a R$ {reembolsavel:.2f} pela tabela externa."
+            ),
+            regras_aplicadas=("RN-012", "RN-013"),
+        )
+    return _rejeitar_v4(
+        despesa,
+        conversao,
+        "LIMITE_ESGOTADO",
+        f"Limite de R$ {regra.limite:.2f} já consumido para a data e categoria.",
+        ("RN-012", "RN-013"),
+    )
 
 
 
