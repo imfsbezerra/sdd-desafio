@@ -1,365 +1,153 @@
-# Plan — Motor de Cálculo de Reembolso
+# Plano Técnico — Motor de Cálculo de Reembolso
 
-**Versão:** 1.0 · **Status:** aprovado · **Última alteração:** 2026-10-05
+**Versão:** 1.0 · **Baseado na spec:** 1.1 · **Data:** 2026-10-05
 
-> **Regra de ouro:** este arquivo descreve o COMO — stack, arquitetura, modelo de dados,
-> decisões técnicas com alternativas consideradas. Aqui *sim* pode citar linguagem, biblioteca,
-> classe, função. A spec já definiu o QUÊ; este arquivo explica como alcançar.
+> Este documento define como implementar a spec. Nenhuma regra de negócio nova
+> deve nascer aqui.
 
----
+## 1. Stack
 
-## 1. Stack e justificativa
+| Escolha | Decisão | Por quê | Alternativa descartada |
+|---|---|---|---|
+| Linguagem | Python 3.11+ | Legibilidade, boa biblioteca padrão e execução simples | Node.js: também serviria, mas exigiria configurar pacote para um domínio pequeno |
+| CLI | `argparse` da biblioteca padrão | Suporta a interface fixa sem dependência externa | Click: ergonomia boa, mas acrescenta instalação sem benefício necessário |
+| JSON e datas | Biblioteca padrão | O contrato é pequeno e estável | Validador externo: custo adicional e mensagens pouco controladas |
+| Dinheiro | `Decimal`, com leitura decimal direta do JSON | Evita aritmética binária e preserva a regra RN-012 | `float`: pode introduzir resíduos; centavos inteiros: complica o valor original com mais de 2 casas |
+| Testes | `unittest` da biblioteca padrão | Roda sem instalar pacotes | pytest: mais conciso, porém desnecessário para o prazo e escopo |
 
-**Linguagem:** Python 3.10+
-**Framework CLI:** Click
-**Validação:** Pydantic
-**Testes:** pytest com pytest-cov
+Não haverá dependências de produção nem de teste fora da distribuição do Python.
 
-### Por quê Python?
+## 2. Arquitetura
 
-- Manipulação de JSON é trivial (stdlib `json`)
-- Pydantic oferece validação de schema + serialização de forma declarativa
-- Click torna CLI robusta e testável sem complexidade
-- Prototipagem rápida; fácil de ler e debugar
-- Comunidade Python no universo de dados/finanças é forte
-- Testes são simples de escrever e executar
-
-### Alternativas descartadas
-
-- **Node.js:** Teria funcionado, mas Python é mais natural para processamento de dados
-- **Go:** Correto e rápido, mas seria over-engineering para este escopo
-- **Java:** Muito verboso para MVP
-
----
-
-## 2. Arquitetura em blocos
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                  CLI (Click)                            │
-│  - Recebe --input e --output                            │
-│  - Valida argumentos                                    │
-└────────────────┬────────────────────────────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────────────────────────────┐
-│          Loader (input_loader.py)                       │
-│  - Lê JSON do arquivo                                   │
-│  - Validação estrutural com Pydantic                    │
-│  - Retorna objeto EntradaReembolso tipado               │
-└────────────────┬────────────────────────────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────────────────────────────┐
-│      Motor de Cálculo (reembolso_engine.py)             │
-│  - ProcessadorReembolso: orquestra o fluxo              │
-│  - ValidadorDespesa: aplica regras de rejeição         │
-│  - AcumuladorDia: agrupa por dia/noite                 │
-│  - CalculadorLimite: aplica limites                    │
-│  - GeradorRelatorio: monta a saída                     │
-└────────────────┬────────────────────────────────────────┘
-                 │
-                 ▼
-┌─────────────────────────────────────────────────────────┐
-│        Writer (output_writer.py)                        │
-│  - Serializa resultado para JSON                        │
-│  - Escreve arquivo                                      │
-└─────────────────────────────────────────────────────────┘
+```text
+arquivo JSON
+    ↓
+leitura decimal → validação do contrato → motor puro → montagem do resultado
+                                                            ↓
+                                                     gravação atômica JSON
 ```
 
----
+- `src/cli.py`: argumentos, códigos de saída e mensagens para o usuário;
+- `src/io_json.py`: leitura, validação estrutural e gravação segura;
+- `src/model.py`: estruturas internas de entrada e decisão;
+- `src/money.py`: normalização e formatação monetária;
+- `src/engine.py`: ordem das regras, duplicidade, limites e resumo;
+- `tests/`: testes unitários do núcleo e testes ponta a ponta da CLI.
 
-## 3. Modelo de dados
+O núcleo recebe dados já validados e devolve um objeto de resultado sem acessar
+arquivos, relógio ou terminal. Isso mantém as regras testáveis e reduz o custo de
+uma futura mudança de política.
 
-### Entrada (Pydantic)
+## 3. Modelo de dados interno
 
-```python
-class Colaborador(BaseModel):
-    id: str
-    nome: str
-    centro_custo: str
+### Entrada validada
 
-class Periodo(BaseModel):
-    competencia: str  # YYYY-MM
-    inicio: date
-    fim: date
+- `Colaborador`: `id`, `nome`, `centro_custo`;
+- `Periodo`: `competencia`, `inicio`, `fim` como datas;
+- `Despesa`: posição original, campos recebidos, valor original decimal, valor
+  normalizado e textos canônicos usados apenas em comparações;
+- `Solicitacao`: colaborador, período e lista ordenada de despesas.
 
-class Despesa(BaseModel):
-    id: str
-    data: date
-    categoria: str
-    descricao: str
-    fornecedor: str
-    valor: Decimal  # Usar Decimal para precisão monetária
-    tem_nota_fiscal: bool
+### Resultado
 
-class EntradaReembolso(BaseModel):
-    colaborador: Colaborador
-    periodo: Periodo
-    despesas: list[Despesa]
-```
+- `Decisao`: ID, status, quatro valores monetários, código, justificativa e IDs de
+  regras;
+- `Resumo`: totais monetários e contagens por status;
+- `Resultado`: versão da política, dados copiados, resumo e decisões ordenadas.
 
-### Saída (Pydantic)
+Os objetos internos usam `Decimal`; somente na fronteira de saída os valores são
+convertidos para textos com duas casas.
 
-```python
-class DecisaoDespesa(BaseModel):
-    id_despesa: str
-    data: date
-    categoria: str
-    descricao: str
-    valor_original: Decimal
-    valor_reembolsavel: Decimal
-    status: str  # "ACEITA", "PARCIAL", "REJEITADA"
-    motivo: str
-    regras_aplicadas: list[str]  # ["RN-001", "RN-004", ...]
+## 4. Representação da política
 
-class ResultadoCategoria(BaseModel):
-    total_submetido: Decimal
-    total_reembolsavel: Decimal
-    total_nao_reembolsavel: Decimal
-    justificativa: str
+Limites e versão da política ficam centralizados em dados imutáveis no módulo do
+motor:
 
-class SumarioProcessamento(BaseModel):
-    colaborador_id: str
-    colaborador_nome: str
-    periodo_competencia: str
-    data_processamento: datetime
-    total_despesas_submetidas: Decimal
-    total_reembolsavel: Decimal
-    total_nao_reembolsavel: Decimal
-    despesas_processadas: int
-    despesas_rejeitadas: int
-    despesas_parciais: int
+| Chave | Valor |
+|---|---:|
+| `alimentacao` | R$ 60,00 por data |
+| `transporte_urbano` | R$ 80,00 por data |
+| `hospedagem` | R$ 250,00 por item |
+| nota fiscal | acima de R$ 100,00 |
 
-class SaidaReembolso(BaseModel):
-    sumario_processamento: SumarioProcessamento
-    resultado_por_categoria: dict[str, ResultadoCategoria]
-    decisoes_por_despesa: list[DecisaoDespesa]
-```
-
----
-
-## 4. Fluxo de processamento detalhado
-
-### Fase 1: Validação de entrada
-
-1. Carregar JSON
-2. Validar schema com Pydantic
-3. Validar período: `inicio <= fim`, datas válidas
-4. Validar cada despesa: valores >= 0 ou valores negativos permitidos
-
-Se erro estrutural, falhar com mensagem clara.
-
-### Fase 2: Filtro inicial (RN-007, RN-009)
-
-Para cada despesa:
-- Verificar se data está em `[periodo.inicio, periodo.fim]`
-  - Não: marcar REJEITADA, motivo "fora do período de competência"
-- Verificar se categoria está em `["alimentacao", "transporte_urbano", "hospedagem"]` (case-insensitive)
-  - Não: marcar REJEITADA, motivo "categoria não está na política de reembolso"
-
-Descartar despesas rejeitadas daqui em diante.
-
-### Fase 3: Validação de nota fiscal (RN-005)
-
-Para cada despesa restante:
-- Se `abs(valor) > 100.00` e `tem_nota_fiscal == false`:
-  - Marcar REJEITADA, motivo "nota fiscal obrigatória acima de R$ 100"
-
-### Fase 4: Detecção de duplicatas (RN-008)
-
-Agrupar por `(data, categoria, valor, fornecedor)`:
-- Se grupo tem 2+ despesas: marcar a primeira como ACEITA_CANDIDATA, as outras como REJEITADA, motivo "duplicata detectada"
-
-### Fase 5: Agregação por dia/noite
-
-Agrupar despesas restantes por `(data, categoria)`:
-
-```python
-agregado = {
-    ("2026-07-03", "alimentacao"): [d-001, d-002, ...],
-    ("2026-07-06", "transporte_urbano"): [d-003, d-004, ...],
-}
-```
-
-### Fase 6: Cálculo de limites (RN-001, RN-002, RN-003, RN-004, RN-006)
-
-Para cada agregado:
-
-1. Somar valores (incluindo negativos = estornos)
-2. Determinar limite conforme categoria:
-   - alimentacao: R$ 60
-   - transporte_urbano: R$ 80
-   - hospedagem: R$ 250
-3. Se total <= limite: ACEITAR tudo
-4. Se total > limite:
-   - Processar FIFO: primeira despesa fica com min(valor, espaço_restante)
-   - Próximas: mesmo processo
-   - Excedente: REJEITADA, motivo "limite diário atingido"
-5. Se há estornos: permitir reembolso adicional para itens posteriores
-
-### Fase 7: Geração de relatório
-
-1. Somar por categoria
-2. Contar: processadas, rejeitadas, parciais
-3. Montar saída JSON
-4. Registrar timestamp
-
----
+A ordem das validações permanece explícita em uma única rotina de avaliação, pois
+ela é comportamento observável definido na seção 9 da spec.
 
 ## 5. Decisões técnicas
 
-### DEC-001: Usar Decimal em vez de float
+### DT-001 — Somente biblioteca padrão
 
-**Por quê:** Float tem precisão limitada (ex: 0.1 + 0.2 ≠ 0.3 em binário).
-Dinheiro exige precisão. Decimal garante.
+**Contexto:** a ferramenta precisa ser reproduzível em ambiente de correção.
 
-**Alternativa descartada:** Usar inteiros (centavos). Funciona, mas menos legível.
+**Decisão:** usar somente módulos da biblioteca padrão.
 
----
+**Alternativa descartada:** framework de modelos e CLI; reduziria código local,
+mas criaria etapa de instalação e risco de versão.
 
-### DEC-002: Processar FIFO em agregados
+**Consequência:** validações serão escritas no projeto, porém execução e testes
+não dependem de rede.
 
-**Por quê:** Justo com o colaborador. Primeira despesa tem prioridade.
+### DT-002 — Núcleo funcional e I/O separado
 
-**Alternativa descartada:** Processar maior-para-menor. Favorecia reembolsos de contas altas primeiro.
+**Contexto:** regras serão alteradas no segundo dia e precisam de testes rápidos.
 
----
+**Decisão:** o motor não lê nem grava arquivos e não encerra o processo.
 
-### DEC-003: Normalizar categoria para minúscula
+**Alternativa descartada:** concentrar CLI, parsing e cálculo em um único módulo;
+seria menor no início, mas tornaria testes e mudanças acoplados.
 
-**Por quê:** "ALIMENTACAO", "alimentacao", "Alimentacao" são a mesma coisa. Evita rejeições por tipografia.
+**Consequência:** testes de regra constroem entradas em memória; poucos testes E2E
+cobrem as fronteiras.
 
-**Implementação:** No carregamento, fazer `despesa.categoria = despesa.categoria.lower()`.
+### DT-003 — Saída gravada de forma atômica
 
----
+**Contexto:** RN-001 proíbe resultado parcial e a CLI pode falhar ao serializar ou
+gravar.
 
-### DEC-004: Arredondar valores para 2 casas decimais (teto)
+**Decisão:** gerar todo o conteúdo antes e substituir o destino somente após uma
+gravação temporária bem-sucedida no mesmo diretório.
 
-**Por quê:** Moeda brasileira tem centavos. Valores como R$ 33,333 precisam ser tratados.
+**Alternativa descartada:** escrever diretamente no destino; uma falha poderia
+deixar JSON truncado.
 
-**Implementação:** `Decimal(str(valor)).quantize(Decimal('0.01'), rounding=ROUND_UP)`
+**Consequência:** erro preserva um arquivo anterior e facilita afirmar que sucesso
+significa resultado completo.
 
----
+### DT-004 — Erros de entrada agregados quando possível
 
-### DEC-005: Estornos reduzem consumo de limite
+**Contexto:** RN-001 exige localizar o campo ou a condição inválida.
 
-**Por quê:** Se teve estorno, o colaborador consomiu menos. Justo liberar espaço.
+**Decisão:** validar toda a estrutura e devolver uma lista curta de problemas,
+mantendo caminhos como `despesas[2].valor`.
 
-**Implementação:** Somar valores (com sinal); se negativo, reduz o total da categoria no dia.
+**Alternativa descartada:** parar no primeiro campo; implementação menor, mas pior
+para quem precisa corrigir o documento.
 
----
+**Consequência:** a CLI usa código de saída 2 para uso/entrada inválida e 1 para
+falha operacional inesperada.
 
-## 6. Estrutura de arquivos
+## 6. Estratégia de testes
 
-```
-src/
-├── __init__.py
-├── main.py                    # Entry point do CLI
-├── models/
-│   ├── __init__.py
-│   ├── entrada.py             # Modelos Pydantic de entrada
-│   └── saida.py               # Modelos Pydantic de saída
-├── loaders/
-│   ├── __init__.py
-│   └── input_loader.py        # Carregamento e validação de JSON
-├── engine/
-│   ├── __init__.py
-│   ├── validador.py           # Aplicação de regras
-│   ├── acumulador.py          # Agregação por dia/noite
-│   ├── calculador.py          # Cálculo de limites
-│   └── processador.py         # Orquestração do fluxo
-├── writers/
-│   ├── __init__.py
-│   └── output_writer.py       # Serialização de saída
-└── utils/
-    ├── __init__.py
-    └── constants.py           # Limites, categorias válidas, etc.
+- testes unitários para dinheiro, contrato, assinatura de duplicidade, precedência
+  e cada RN-001 a RN-013;
+- testes parametrizados por subtestes para fronteiras de data, nota e dinheiro;
+- teste de integração do arquivo de exemplo com as 14 decisões e totais exatos;
+- testes ponta a ponta chamando a CLI em diretório temporário;
+- teste de erro garantindo que destino anterior não seja sobrescrito.
 
-tests/
-├── __init__.py
-├── test_entrada.py            # Validação de entrada
-├── test_validador.py          # Testes de regras (RN-001 a RN-009)
-├── test_engine.py             # Testes de integração
-└── fixtures/
-    ├── __init__.py
-    ├── entrada_valida.json
-    ├── entrada_com_duplicata.json
-    └── entrada_fora_periodo.json
-```
+Nomenclatura: `test_rnNNN_<comportamento>` e, quando útil,
+`test_ambNNN_<decisao>`. A matriz no fim de `tasks.md` liga regra, task e teste.
 
----
+Não haverá meta numérica isolada de cobertura. A condição é cada regra e cada caso
+de borda possuir uma asserção relevante, além de todo o conjunto passar.
 
-## 7. Estratégia de testes
+## 7. Riscos
 
-### Pirâmide de testes
+| Risco | Probabilidade | Mitigação |
+|---|---|---|
+| Serializar `Decimal` incorretamente | Média | Converter apenas na camada de saída e testar valores com 3 casas |
+| Divergência entre precedência e testes | Média | Um teste com item atingido por múltiplas recusas |
+| Totais não reconciliarem com valor negativo | Média | Centralizar contribuição positiva e testar RN-004/RN-013 juntas |
+| Mudança futura exigir novo dado de entrada | Alta | Manter validação, modelo e motor separados |
+| Mensagens humanas virarem base de decisão | Baixa | Usar `codigo_motivo` estável para testes e consumo automático |
 
-**Base (Unit):** 70%
-- Cada regra tem seu teste isolado (RN-001, RN-002, ...)
-- Testes de arredondamento, normalização
-- Testes de validação Pydantic
-
-**Meio (Integration):** 25%
-- Processar arquivo inteiro
-- Verificar sumário
-- Comparar saída JSON
-
-**Topo (E2E):** 5%
-- Rodar CLI com arquivo real
-- Verificar arquivo de saída
-
-### Cobertura mínima
-
-- 80% de cobertura de código
-- 100% de cobertura de regras de negócio
-- Cada caso de borda (seção 7 da spec) tem teste
-
-### Casos de teste críticos
-
-- `test_rn001_limite_alimentacao_dia`
-- `test_rn002_limite_transporte_dia`
-- `test_rn003_limite_hospedagem_noite`
-- `test_rn004_reembolso_parcial`
-- `test_rn005_nota_fiscal_obrigatoria`
-- `test_rn006_estornos`
-- `test_rn007_periodo_competencia`
-- `test_rn008_duplicata`
-- `test_rn009_categoria_valida`
-- `test_amb001_agregacao_dia`
-- `test_amb003_limite_100_exato`
-- `test_amb009_arredondamento_moeda`
-
----
-
-## 8. Dependências (requirements.txt)
-
-```
-click==8.1.7
-pydantic==2.4.2
-pytest==7.4.3
-pytest-cov==4.1.0
-python-dateutil==2.8.2
-```
-
----
-
-## 9. Como executar
-
-```bash
-# Instalação
-pip install -r requirements.txt
-
-# Execução
-python -m src.main calcular --input despesas.json --output resultado.json
-
-# Testes
-pytest tests/ -v --cov=src --cov-report=html
-```
-
----
-
-## 10. Próximos passos
-
-1. **tasks.md:** Decompor este plano em tarefas T-001, T-002, ... com commits específicos
-2. **Implementação:** Seguir a ordem de tasks
-3. **Envelope:** Estar pronto para mudanças (ex: campo `em_viagem`)
