@@ -134,3 +134,63 @@ def avaliar_duplicata_e_nota(
     return None
 
 
+def aplicar_limite_diario(
+    despesa: Despesa, saldos: dict[tuple[object, str], Decimal]
+) -> Decisao:
+    """Consome o saldo de alimentação ou transporte na ordem recebida."""
+
+    categoria = categoria_canonica(despesa)
+    if categoria not in {"alimentacao", "transporte_urbano"}:
+        raise ValueError(f"categoria sem limite diário: {categoria}")
+
+    chave = (despesa.data, categoria)
+    saldo = saldos.setdefault(chave, limite_base(categoria))
+    reembolsavel = min(despesa.valor_normalizado, saldo)
+    saldos[chave] = saldo - reembolsavel
+    regra_limite = "RN-007" if categoria == "alimentacao" else "RN-008"
+    limite = limite_base(categoria)
+
+    if reembolsavel == despesa.valor_normalizado:
+        return Decisao(
+            id=despesa.id,
+            status=Status.APROVADA,
+            valor_original=despesa.valor_original,
+            valor_normalizado=despesa.valor_normalizado,
+            valor_reembolsavel=reembolsavel,
+            valor_nao_reembolsavel=ZERO,
+            codigo_motivo="APROVADA_INTEGRAL",
+            justificativa=(
+                f"Valor integral dentro do limite diário de R$ {limite:.2f} "
+                f"para {categoria} em {despesa.data.isoformat()}."
+            ),
+            regras_aplicadas=(regra_limite,),
+        )
+
+    if reembolsavel > ZERO:
+        return Decisao(
+            id=despesa.id,
+            status=Status.PARCIAL,
+            valor_original=despesa.valor_original,
+            valor_normalizado=despesa.valor_normalizado,
+            valor_reembolsavel=reembolsavel,
+            valor_nao_reembolsavel=despesa.valor_normalizado - reembolsavel,
+            codigo_motivo="LIMITE_PARCIAL",
+            justificativa=(
+                f"Reembolso limitado ao saldo de R$ {reembolsavel:.2f} para "
+                f"{categoria} em {despesa.data.isoformat()}."
+            ),
+            regras_aplicadas=(regra_limite, "RN-010"),
+        )
+
+    return rejeitar(
+        despesa,
+        "LIMITE_ESGOTADO",
+        (
+            f"Limite diário de R$ {limite:.2f} para {categoria} em "
+            f"{despesa.data.isoformat()} já foi consumido."
+        ),
+        (regra_limite, "RN-010"),
+    )
+
+
+
