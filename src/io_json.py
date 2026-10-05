@@ -16,6 +16,7 @@ from src.money import normalizar_valor
 
 
 COMPETENCIA_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+MOEDA_RE = re.compile(r"^[A-Za-z]{3}$")
 
 
 class EntradaInvalida(ValueError):
@@ -114,6 +115,14 @@ def validar_documento(dados: Any) -> Solicitacao:
         categoria = _texto(item, "categoria", caminho, erros)
         descricao = _texto(item, "descricao", caminho, erros)
         fornecedor = _texto(item, "fornecedor", caminho, erros)
+        moeda_bruta = item.get("moeda", "BRL")
+        if not isinstance(moeda_bruta, str) or not MOEDA_RE.fullmatch(
+            moeda_bruta.strip()
+        ):
+            erros.append(f"{caminho}.moeda: deve conter três letras")
+            moeda = ""
+        else:
+            moeda = moeda_bruta.strip().upper()
         valor = _decimal(item, "valor", caminho, erros)
         tem_nota = item.get("tem_nota_fiscal")
         if not isinstance(tem_nota, bool):
@@ -125,6 +134,7 @@ def validar_documento(dados: Any) -> Solicitacao:
             and categoria
             and descricao
             and fornecedor
+            and moeda
             and valor is not None
             and isinstance(tem_nota, bool)
         ):
@@ -136,6 +146,7 @@ def validar_documento(dados: Any) -> Solicitacao:
                     categoria=categoria,
                     descricao=descricao,
                     fornecedor=fornecedor,
+                    moeda=moeda,
                     valor_original=valor,
                     valor_normalizado=normalizar_valor(valor),
                     tem_nota_fiscal=tem_nota,

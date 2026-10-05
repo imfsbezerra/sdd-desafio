@@ -35,6 +35,7 @@ class Despesa:
     categoria: str
     descricao: str
     fornecedor: str
+    moeda: str
     valor_original: Decimal
     valor_normalizado: Decimal
     tem_nota_fiscal: bool
@@ -81,4 +82,12 @@ class Politica:
 class Cambio:
     moeda_base: str
     taxas: Mapping[date, Mapping[str, Decimal]]
+
+
+@dataclass(frozen=True)
+class Conversao:
+    moeda_original: str
+    taxa: Decimal | None
+    data_taxa: date | None
+    valor_brl: Decimal | None
 
