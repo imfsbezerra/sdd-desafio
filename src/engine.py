@@ -14,6 +14,7 @@ LIMITES_BASE = {
     "transporte_urbano": Decimal("80.00"),
     "hospedagem": Decimal("250.00"),
 }
+LIMITE_NOTA_FISCAL = Decimal("100.00")
 
 
 def texto_canonico(texto: str) -> str:
@@ -89,4 +90,47 @@ def avaliar_elegibilidade_basica(
         )
 
     return None
+
+
+def assinatura_duplicidade(despesa: Despesa) -> tuple[object, ...]:
+    """Identidade de negócio definida por RN-006."""
+
+    return (
+        despesa.data,
+        categoria_canonica(despesa),
+        texto_canonico(despesa.descricao),
+        texto_canonico(despesa.fornecedor),
+        despesa.valor_normalizado,
+    )
+
+
+def avaliar_duplicata_e_nota(
+    despesa: Despesa, assinaturas_vistas: set[tuple[object, ...]]
+) -> Decisao | None:
+    """Aplica RN-006 antes de RN-005, conforme a seção 9 da spec."""
+
+    assinatura = assinatura_duplicidade(despesa)
+    if assinatura in assinaturas_vistas:
+        return rejeitar(
+            despesa,
+            "DUPLICATA",
+            "Lançamento posterior repete data, categoria, descrição, fornecedor e valor.",
+            ("RN-006",),
+        )
+
+    # A primeira ocorrência reserva a assinatura mesmo se falhar depois por nota.
+    assinaturas_vistas.add(assinatura)
+    if despesa.valor_normalizado > LIMITE_NOTA_FISCAL and not despesa.tem_nota_fiscal:
+        return rejeitar(
+            despesa,
+            "NOTA_FISCAL_AUSENTE",
+            (
+                f"Nota fiscal obrigatória para valor solicitado de "
+                f"R$ {despesa.valor_normalizado:.2f}."
+            ),
+            ("RN-005",),
+        )
+
+    return None
+
 
