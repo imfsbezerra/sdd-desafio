@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
@@ -167,4 +169,32 @@ def carregar_solicitacao(caminho: str | Path) -> Solicitacao:
     except (OSError, json.JSONDecodeError, UnicodeError, ValueError) as erro:
         raise EntradaInvalida([f"arquivo: {erro}"]) from erro
     return validar_documento(dados)
+
+
+def gravar_resultado(caminho: str | Path, resultado: dict[str, object]) -> None:
+    """Grava JSON por substituição atômica, sem deixar arquivo parcial."""
+
+    destino = Path(caminho)
+    temporario: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="\n",
+            dir=destino.parent,
+            prefix=f".{destino.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as arquivo:
+            temporario = Path(arquivo.name)
+            json.dump(resultado, arquivo, ensure_ascii=False, indent=2)
+            arquivo.write("\n")
+            arquivo.flush()
+            os.fsync(arquivo.fileno())
+        os.replace(temporario, destino)
+        temporario = None
+    finally:
+        if temporario is not None:
+            temporario.unlink(missing_ok=True)
+
 
