@@ -193,4 +193,39 @@ def aplicar_limite_diario(
     )
 
 
+def aplicar_limite_hospedagem(despesa: Despesa) -> Decisao:
+    """Aplica uma diária por lançamento, sem interpretar texto livre."""
+
+    if categoria_canonica(despesa) != "hospedagem":
+        raise ValueError("despesa não pertence à categoria hospedagem")
+
+    limite = limite_base("hospedagem")
+    reembolsavel = min(despesa.valor_normalizado, limite)
+    if reembolsavel == despesa.valor_normalizado:
+        return Decisao(
+            id=despesa.id,
+            status=Status.APROVADA,
+            valor_original=despesa.valor_original,
+            valor_normalizado=despesa.valor_normalizado,
+            valor_reembolsavel=reembolsavel,
+            valor_nao_reembolsavel=ZERO,
+            codigo_motivo="APROVADA_INTEGRAL",
+            justificativa="Valor integral dentro do limite de R$ 250,00 por diária.",
+            regras_aplicadas=("RN-009",),
+        )
+
+    return Decisao(
+        id=despesa.id,
+        status=Status.PARCIAL,
+        valor_original=despesa.valor_original,
+        valor_normalizado=despesa.valor_normalizado,
+        valor_reembolsavel=reembolsavel,
+        valor_nao_reembolsavel=despesa.valor_normalizado - reembolsavel,
+        codigo_motivo="LIMITE_PARCIAL",
+        justificativa="Reembolso limitado a R$ 250,00 para uma diária de hospedagem.",
+        regras_aplicadas=("RN-009", "RN-010"),
+    )
+
+
+
 
