@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 from enum import StrEnum
+from typing import Mapping
 
 
 class Status(StrEnum):
@@ -57,4 +58,27 @@ class Decisao:
     codigo_motivo: str
     justificativa: str
     regras_aplicadas: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class RegraCategoria:
+    limite: Decimal
+    periodicidade: str
+
+
+@dataclass(frozen=True)
+class Politica:
+    versao: str
+    vigencia: date
+    moeda_base: str
+    padrao: Mapping[str, RegraCategoria]
+    centros_custo: Mapping[str, Mapping[str, RegraCategoria]]
+    nota_fiscal_acima_de: Decimal
+    acrescimo_viagem_percentual: Decimal
+
+
+@dataclass(frozen=True)
+class Cambio:
+    moeda_base: str
+    taxas: Mapping[date, Mapping[str, Decimal]]
 
