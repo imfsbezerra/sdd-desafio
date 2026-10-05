@@ -1,0 +1,46 @@
+# ---------------------------------------------------------------------------
+# MATERIAL DO INSTRUTOR — NUNCA COMMITAR NESTE REPOSITORIO
+# Contem o envelope lacrado do Dia 2, o gabarito das ambiguidades e o
+# avaliador. Publicar qualquer um destes arquivos invalida o desafio.
+# ---------------------------------------------------------------------------
+instrutor/
+
+# Pareceres de correcao, caso sejam gerados dentro do repo
+PARECER-*.md
+
+# ---------------------------------------------------------------------------
+# Ruido de ambiente
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+*~
+
+.idea/
+.vscode/
+*.code-workspace
+
+.env
+.env.*
+!.env.example
+
+# Dependencias e artefatos (stack livre — cobrindo as mais provaveis)
+node_modules/
+dist/
+build/
+coverage/
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+target/
+bin/
+obj/
+
+# Claude Code — configuracao local de maquina.
+# ATENCAO: CLAUDE.md NAO entra aqui. Ele e artefato entregavel e deve ser commitado.
+.claude/settings.local.json
