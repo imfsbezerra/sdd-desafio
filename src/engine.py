@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping
 from decimal import Decimal
 
+from src.exchange import converter_para_brl
 from src.model import (
+    Cambio,
     Conversao,
     Decisao,
     Despesa,
@@ -498,6 +500,134 @@ def aplicar_limite_v4(
         f"Limite de R$ {regra.limite:.2f} já consumido para a data e categoria.",
         ("RN-012", "RN-013"),
     )
+
+
+def processar_solicitacao_v4(
+    solicitacao: Solicitacao, politica: Politica, cambio: Cambio
+) -> dict[str, object]:
+    """Processa a solicitação com política e câmbio externos."""
+
+    origem, tabela = selecionar_tabela(
+        politica, solicitacao.colaborador.centro_custo
+    )
+    decisoes: list[Decisao] = []
+    assinaturas: set[tuple[object, ...]] = set()
+    saldos: dict[tuple[object, str], Decimal] = {}
+
+    for despesa in solicitacao.despesas:
+        conversao = converter_para_brl(despesa, cambio)
+        if not (solicitacao.periodo.inicio <= despesa.data <= solicitacao.periodo.fim):
+            decisao = _rejeitar_v4(
+                despesa,
+                conversao,
+                "FORA_DA_COMPETENCIA",
+                (
+                    f"Despesa em {despesa.data.isoformat()} fora do período "
+                    f"{solicitacao.periodo.inicio.isoformat()} a "
+                    f"{solicitacao.periodo.fim.isoformat()}."
+                ),
+                ("RN-002",),
+            )
+        elif conversao.valor_brl is None:
+            decisao = _rejeitar_v4(
+                despesa,
+                conversao,
+                "COTACAO_INDISPONIVEL",
+                (
+                    f"Não há cotação de {despesa.moeda} na data "
+                    f"{despesa.data.isoformat()} nem em data anterior."
+                ),
+                ("RN-008",),
+            )
+        else:
+            decisao, regra = avaliar_politica_e_documentos_v4(
+                despesa, conversao, tabela, politica, assinaturas
+            )
+            if decisao is None:
+                assert regra is not None
+                decisao = aplicar_limite_v4(despesa, conversao, regra, saldos)
+        decisoes.append(decisao)
+
+    total_solicitado = sum(
+        (
+            max(item.valor_convertido_brl, ZERO)
+            for item in decisoes
+            if item.valor_convertido_brl is not None
+        ),
+        start=ZERO,
+    )
+    total_reembolsavel = sum(
+        (item.valor_reembolsavel for item in decisoes), start=ZERO
+    )
+    total_nao_reembolsavel = total_solicitado - total_reembolsavel
+
+    return {
+        "politica": {
+            "versao": politica.versao,
+            "origem_limites": origem,
+            "centro_custo": solicitacao.colaborador.centro_custo,
+            "moeda_base": politica.moeda_base,
+        },
+        "colaborador": {
+            "id": solicitacao.colaborador.id,
+            "nome": solicitacao.colaborador.nome,
+            "centro_custo": solicitacao.colaborador.centro_custo,
+        },
+        "periodo": {
+            "competencia": solicitacao.periodo.competencia,
+            "inicio": solicitacao.periodo.inicio.isoformat(),
+            "fim": solicitacao.periodo.fim.isoformat(),
+        },
+        "resumo": {
+            "quantidade_despesas": len(solicitacao.despesas),
+            "total_solicitado": formatar_valor(total_solicitado),
+            "total_reembolsavel": formatar_valor(total_reembolsavel),
+            "total_nao_reembolsavel": formatar_valor(total_nao_reembolsavel),
+            "quantidade_sem_conversao": sum(
+                item.valor_convertido_brl is None for item in decisoes
+            ),
+            "quantidade_aprovadas": sum(
+                item.status is Status.APROVADA for item in decisoes
+            ),
+            "quantidade_parciais": sum(
+                item.status is Status.PARCIAL for item in decisoes
+            ),
+            "quantidade_rejeitadas": sum(
+                item.status is Status.REJEITADA for item in decisoes
+            ),
+        },
+        "decisoes": [_serializar_decisao_v4(item) for item in decisoes],
+    }
+
+
+def _serializar_decisao_v4(decisao: Decisao) -> dict[str, object]:
+    return {
+        "id": decisao.id,
+        "status": decisao.status.value,
+        "moeda_original": decisao.moeda_original,
+        "valor_original": formatar_original(decisao.valor_original),
+        "valor_normalizado": formatar_valor(decisao.valor_normalizado),
+        "taxa_cambio": (
+            f"{decisao.taxa_cambio:.6f}"
+            if decisao.taxa_cambio is not None
+            else None
+        ),
+        "data_taxa_cambio": (
+            decisao.data_taxa_cambio.isoformat()
+            if decisao.data_taxa_cambio is not None
+            else None
+        ),
+        "valor_convertido_brl": (
+            formatar_valor(decisao.valor_convertido_brl)
+            if decisao.valor_convertido_brl is not None
+            else None
+        ),
+        "valor_reembolsavel": formatar_valor(decisao.valor_reembolsavel),
+        "valor_nao_reembolsavel": formatar_valor(decisao.valor_nao_reembolsavel),
+        "codigo_motivo": decisao.codigo_motivo,
+        "justificativa": decisao.justificativa,
+        "regras_aplicadas": list(decisao.regras_aplicadas),
+    }
 
 
 
