@@ -107,11 +107,65 @@ provam seu aceite. Marcar `[x]` e preencher o hash somente depois de verificar.
 
 ## Fase 6 — Envelope (Dia 2)
 
-Criar novas tasks a partir de **T-012**, sem renumerar as anteriores. A ordem
-obrigatória é: atualizar `spec.md` → registrar `DECISIONS.md` → criar tasks →
-alterar testes e implementação.
+- [ ] **T-012 — Carregar e validar política e câmbio externos**
+  - **Atende:** RN-001, RN-002, RN-003; AMB-016 e AMB-024
+  - **Entrega:** modelos imutáveis e leitores completos para os dois arquivos.
+  - **Aceite:** `test_rn001_carrega_fontes_v4`,
+    `test_rn001_rejeita_politica_invalida` e
+    `test_rn001_rejeita_cambio_invalido` passam.
+  - **Commit:** —
 
-## Matriz de cobertura planejada
+- [ ] **T-013 — Adicionar moeda e conversão cambial**
+  - **Atende:** RN-005, RN-006, RN-007, RN-008, RN-015; AMB-018 a AMB-021
+  - **Entrega:** moeda opcional, conversão BRL, busca da última taxa anterior e
+    decisão sem cotação.
+  - **Aceite:** `test_rn006_converte_eur`, `test_rn007_usa_taxa_anterior`,
+    `test_rn008_rejeita_moeda_sem_cotacao` e `test_rn015_arredonda_brl` passam.
+  - **Commit:** —
+
+- [ ] **T-014 — Tornar categorias, limites e nota dirigidos pela política**
+  - **Atende:** RN-003, RN-004, RN-009 a RN-014; AMB-016, AMB-017,
+    AMB-022, AMB-023 e AMB-025
+  - **Entrega:** tabela selecionada por centro, periodicidade genérica, limite zero,
+    duplicidade multimoeda e nota sobre BRL.
+  - **Aceite:** `test_rn003_centro_desconhecido_usa_padrao`,
+    `test_rn004_categoria_zero_e_rejeitada`,
+    `test_rn010_nota_usa_valor_brl` e `test_rn012_periodicidade_dinamica` passam.
+  - **Commit:** —
+
+- [ ] **T-015 — Atualizar orquestração, saída e reconciliação v4**
+  - **Atende:** RN-008, RN-016 e contrato de saída da seção 4
+  - **Entrega:** metadados de política/conversão e totais em BRL.
+  - **Aceite:** `test_rn016_saida_v4_preserva_ordem_e_reconcilia` e
+    `test_rn008_sem_cotacao_incrementa_contagem` passam.
+  - **Commit:** —
+
+- [ ] **T-016 — Estender CLI com fontes externas e defaults**
+  - **Atende:** RN-001 e seção 3
+  - **Entrega:** `--politica`, `--cambio`, defaults versionados e preservação do
+    destino em erro de configuração.
+  - **Aceite:** `test_cli_v4_com_defaults`, `test_cli_v4_caminhos_explicitos` e
+    `test_cli_politica_invalida_preserva_destino` passam.
+  - **Commit:** —
+
+- [ ] **T-017 — Fechar integrações do envelope e regressão v3→v4**
+  - **Atende:** RN-001 a RN-016 e casos da seção 8
+  - **Entrega:** resultados exatos dos dois arquivos do envelope e novo resultado
+    do exemplo antigo sob a v4.
+  - **Aceite:** `test_integracao_envelope_comercial`,
+    `test_integracao_envelope_centro_desconhecido` e
+    `test_integracao_exemplo_v3_sob_politica_v4` passam com toda a suíte.
+  - **Commit:** —
+
+- [ ] **T-018 — Atualizar README, sessão e relatório do envelope**
+  - **Atende:** critérios de entrega e relatório
+  - **Entrega:** comandos v4, resultados verificados, custo final, diff e análise
+    do que a arquitetura absorveu ou resistiu.
+  - **Aceite:** documentação cita commits reais, não contém campos pendentes da
+    absorção e permite reproduzir os três cenários.
+  - **Commit:** —
+
+## Matriz histórica — spec 1.1 / Política v3
 
 | Regra / decisão | Task | Teste principal |
 |---|---|---|
@@ -138,4 +192,20 @@ alterar testes e implementação.
 | AMB-012 | T-005 | `test_rn010_aloca_na_ordem_de_entrada` |
 | AMB-013–AMB-014 | T-002, T-003 | testes RN-002 |
 | AMB-015 | T-004 | `test_amb015_duplicata_precede_nota` |
+
+## Matriz planejada — spec 2.0 / Política v4
+
+| Regra / decisão | Task | Teste principal |
+|---|---|---|
+| RN-001–RN-002 | T-012, T-016 | `test_rn001_carrega_fontes_v4` |
+| RN-003–RN-004 | T-012, T-014 | `test_rn003_centro_desconhecido_usa_padrao` |
+| RN-005–RN-008 | T-013 | `test_rn007_usa_taxa_anterior` |
+| RN-009–RN-011 | T-014 | `test_rn010_nota_usa_valor_brl` |
+| RN-012–RN-014 | T-014 | `test_rn012_periodicidade_dinamica` |
+| RN-015 | T-013 | `test_rn015_arredonda_brl` |
+| RN-016 | T-015 | `test_rn016_saida_v4_preserva_ordem_e_reconcilia` |
+| AMB-016–AMB-017 | T-012, T-014 | testes RN-003 e RN-004 |
+| AMB-018–AMB-021 | T-013 | testes RN-006 a RN-008 e RN-015 |
+| AMB-022–AMB-025 | T-014 | testes RN-010 a RN-014 |
+| AMB-026 | T-018 | escopo negativo documentado |
 
